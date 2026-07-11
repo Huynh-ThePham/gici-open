@@ -1,0 +1,24 @@
+{
+  "dataset": "1.1",
+  "scene": "open-sky",
+  "algorithm": "rtk_imu_camera_rrr",
+  "upstream_commit": "f2b8579",
+  "paper_reference": {
+    "citation": "Chi et al. 2023, Table V",
+    "ape_position_m": 0.03,
+    "ape_rotation_deg": 0.54
+  },
+  "locked_reproduce_2026_07_11": {
+    "ape_translation_rmse_m": 0.029198,
+    "ape_rotation_rmse_deg": 0.470557,
+    "matched_pose_pairs": 1587,
+    "solution_epochs": 1775,
+    "fixed_epochs": 876,
+    "float_epochs": 899,
+    "loss_epochs": 0
+  },
+  "tolerance": {
+    "ape_translation_rmse_m": 0.005,
+    "ape_rotation_rmse_deg": 0.1
+  }
+}
