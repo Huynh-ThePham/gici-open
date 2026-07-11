@@ -1,0 +1,11 @@
+build-essential
+cmake
+git
+pkg-config
+libboost-all-dev
+libeigen3-dev
+libopencv-dev
+libyaml-cpp-dev
+libgoogle-glog-dev
+libgflags-dev
+libceres-dev
