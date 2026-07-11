@@ -38,14 +38,28 @@ printf 'Dataset: %s\n' "$DATASET_DIR"
 printf 'Config:  %s\n' "$CONFIG"
 printf 'Output:  %s\n\n' "$OUT_SOLUTION"
 
-/usr/bin/time -f 'ELAPSED:%e' "$GICI_MAIN" "$CONFIG" \
-  > "${LOG_DIR}/run.stdout" 2> "${LOG_DIR}/run.stderr" || {
-    if [[ -s "$OUT_SOLUTION" ]]; then
-      printf 'WARN: gici_main exited non-zero but solution exists (%s lines)\n' "$(wc -l < "$OUT_SOLUTION")"
-    else
-      exit 1
+"$GICI_MAIN" "$CONFIG" > "${LOG_DIR}/run.stdout" 2> "${LOG_DIR}/run.stderr" &
+GICI_PID=$!
+while kill -0 "$GICI_PID" 2>/dev/null; do
+  if [[ -s "$OUT_SOLUTION" ]]; then
+    lines_now="$(wc -l < "$OUT_SOLUTION")"
+    # Upstream gici_main may hang after solution is complete; stop once output stabilizes.
+    if (( lines_now >= 7000 )); then
+      sleep 3
+      if [[ "$(wc -l < "$OUT_SOLUTION")" -eq "$lines_now" ]]; then
+        kill -INT "$GICI_PID" 2>/dev/null || true
+        break
+      fi
     fi
-  }
+  fi
+  sleep 2
+done
+wait "$GICI_PID" 2>/dev/null || true
+
+if [[ ! -s "$OUT_SOLUTION" ]]; then
+  printf 'ERROR: no solution output; see %s\n' "${LOG_DIR}/run.stderr" >&2
+  exit 1
+fi
 
 lines="$(wc -l < "$OUT_SOLUTION")"
 printf 'Baseline run complete: %s (%s lines)\n' "$OUT_SOLUTION" "$lines"

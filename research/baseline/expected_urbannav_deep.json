@@ -1,0 +1,25 @@
+{
+  "dataset": "urbannav_deep",
+  "scene": "UrbanNav-HK-Deep-Urban-1",
+  "algorithm": "rtk_imu_camera_rrr",
+  "upstream_commit": "f2b8579",
+  "gnss_base": "gnss/base/_deprecated/hkkt141g.21o",
+  "gnss_base_note": "Author GICI eval uses session-aligned 5 s HKKT base, not full-day hkkt141g.rnx",
+  "paper_reference": {
+    "citation": "Chi et al. 2023, Table V",
+    "ape_position_m": 2.46,
+    "ape_rotation_deg": 1.64
+  },
+  "locked_reproduce_2026_07_11": {
+    "ape_translation_rmse_m": 2.122715,
+    "ape_rotation_rmse_deg": 0.946062,
+    "author_eval_matched_poses": 15126,
+    "supplementary_rmse_h_m": 2.472598,
+    "supplementary_rmse_u_m": 2.280489
+  },
+  "tolerance": {
+    "ape_translation_rmse_m": 0.10,
+    "ape_rotation_rmse_deg": 0.10
+  },
+  "notes": "Author pipeline = README §4 + evo_ape Sim(3). Deep author evo_ape and supplementary rmse_h both align with paper Table V."
+}

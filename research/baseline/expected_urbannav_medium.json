@@ -1,0 +1,24 @@
+{
+  "dataset": "urbannav_medium",
+  "scene": "UrbanNav-HK-Medium-Urban-1",
+  "algorithm": "rtk_imu_camera_rrr",
+  "upstream_commit": "f2b8579",
+  "gnss_base": "gnss/base/hkkt137g.rnx",
+  "paper_reference": {
+    "citation": "Chi et al. 2023, Table V",
+    "ape_position_m": 3.40,
+    "ape_rotation_deg": 1.30
+  },
+  "locked_reproduce_2026_07_11": {
+    "ape_translation_rmse_m": 4.549786,
+    "ape_rotation_rmse_deg": 2.063634,
+    "author_eval_matched_poses": 7376,
+    "supplementary_rmse_h_m": 3.282030,
+    "supplementary_rmse_u_m": 10.017382
+  },
+  "tolerance": {
+    "ape_translation_rmse_m": 0.15,
+    "ape_rotation_rmse_deg": 0.10
+  },
+  "notes": "Author pipeline = README §4 + evo_ape Sim(3), same pass logic as expected_1_1.json. Paper position (3.40 m) matches supplementary horizontal rmse_h (~3%), not author evo_ape 3D (4.55 m) due to ~9 m vertical datum bias on Medium. See research/AUTHOR_METHODOLOGY.md."
+}
