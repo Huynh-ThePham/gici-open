@@ -55,6 +55,14 @@ third_party/yaml-cpp/
 ros_wrapper/src/CMakeLists.txt
 *_with_passward.yaml
 data*/
+!data/
+!data/.gitkeep
+results/
+!results/
+!results/.gitkeep
+logs/
+!logs/
+!logs/.gitkeep
 bin/
 lib/
 *.atx
