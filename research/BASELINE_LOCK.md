@@ -1,6 +1,9 @@
 # Research Baseline Lock
 
-Branch `research/standard-env` is the **canonical upstream baseline** for all
+> **Status: PROVISIONAL** — GICI 1.1 PASS; UrbanNav Medium + Deep chưa verify trên
+> upstream thuần. Chưa bump tag `research-baseline/v2` cho đến khi đủ 3 smoke tests.
+
+Branch `research/standard-env` is the **candidate upstream baseline** for all
 sensor-fusion and adaptive-sensor research in this repository.
 
 ## Upstream identity
@@ -48,6 +51,25 @@ Expected metrics: `research/baseline/expected_1_1.json`
 | APE position RMSE | 0.029 m | 0.03 m |
 | APE rotation RMSE | 0.471° | 0.54° |
 
+## Pending: UrbanNav upstream smoke tests
+
+Chưa chốt gốc vì thiếu reproduce trên upstream thuần (không patch NV2):
+
+| Dataset | Local path | Paper RTK RRR (pos / rot) | Status |
+|---------|------------|----------------------------|--------|
+| UrbanNav Medium | `UrbanNavDataset-master/UrbanNav-HK-Medium-Urban-1` | 3.40 m / 1.30° | **TODO** |
+| UrbanNav Deep | `UrbanNavDataset-master/UrbanNav-HK-Deep-Urban-1` | 2.46 m / 1.64° | **TODO** |
+
+Cần trước khi chốt `research-baseline/v2`:
+
+1. Config RRR upstream-only cho Medium + Deep (RINEX + `gici_rrr/` converted bins).
+2. Calibration / lever-arm từ `extrinsic.yaml` (khác GICI board 1.1).
+3. Eval pipeline tương đương (TST GT, body frame, APE evo).
+4. Ghi `research/baseline/expected_urbannav_medium.json` và `expected_urbannav_deep.json`.
+
+Fork `gici-open` (paper1) đã có config calibrated — **chưa** chứng minh trên
+`gici_research_standard` / upstream thuần @ `f2b8579`.
+
 ## Branch policy for fusion / adaptive research
 
 ```
@@ -65,8 +87,8 @@ Rules:
 
 1. New research branches start from `research/standard-env`, not from `master`.
 2. Baseline configs live under `research/config/`; experiment configs under branch-specific paths.
-3. Every adaptive/fusion change must pass dataset 1.1 smoke test before claiming improvement.
-4. Compare against `research/baseline/expected_1_1.json`, not ad-hoc metrics.
+3. Every adaptive/fusion change must pass smoke tests: **1.1 + UrbanNav Medium + Deep** (khi đã có expected JSON).
+4. Compare against `research/baseline/expected_*.json`, not ad-hoc metrics.
 
 ## Quick start
 

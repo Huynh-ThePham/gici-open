@@ -1,8 +1,8 @@
 # GICI Research Environment
 
-Branch `research/standard-env` is the **locked upstream baseline** for sensor-fusion
-and adaptive-sensor research. See [`BASELINE_LOCK.md`](BASELINE_LOCK.md) for the
-full protocol, expected metrics, and branch policy.
+Branch `research/standard-env` is the **candidate upstream baseline** for sensor-fusion
+and adaptive-sensor research. **Chưa chốt gốc** — còn thiếu smoke test UrbanNav
+Medium + Deep trên upstream thuần. See [`BASELINE_LOCK.md`](BASELINE_LOCK.md).
 
 ## Layout
 
