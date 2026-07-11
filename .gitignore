@@ -66,3 +66,13 @@ logs/
 bin/
 lib/
 *.atx
+
+# ROS 2 wrapper build/runtime artifacts and dataset/generated data
+install/
+log/
+output/
+*.bag
+*.db3
+*.mcap
+__pycache__/
+*.pyc
