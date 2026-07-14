@@ -82,12 +82,13 @@ estimate:
     str_imu_file_roles: [major]
     str_camera_file_roles: [mono]
     output_tags: [fmt_solution_file]
-    # UrbanNav paper reports 1 Hz outputs. The upstream ROS UrbanNav RRR block
-    # aligns to rover GNSS, not to IMU like the GICI-board post-file template.
-    output_align_tag: str_gnss_rov_file
-    output_downsample_rate: 1
+    # Post-file replay is stable when aligned to IMU. Paper-level 1 Hz
+    # comparison is handled by the evaluation script after generating the
+    # full 10 Hz trajectory.
+    output_align_tag: str_imu_file
+    output_downsample_rate: 40
     compute_covariance: false
-    enable_input_align: false
+    enable_input_align: true
     input_align_latency: 0.2
     enable_backend_data_sparsify: true
     pending_num_threshold: 5
@@ -95,22 +96,25 @@ estimate:
       max_keyframes: 20
       min_yaw_std_init_visual: 0.5
     rtk_options:
+      max_window_length: 3
       use_ambiguity_resolution: true
+      estimate_velocity: true
     gnss_estimator_base_options:
       min_num_satellite_redundancy: 2
       use_outlier_rejection: true
+      reject_one_outlier_once: false
       max_pesudorange_error: 30.0
       max_phaserange_error: 0.1
       max_doppler_error: 5.0
-      gnss_error_parameter:
-        code_to_phase_ratio: 1000.0
-        doppler_error_factor: 0.2
-        relative_velocity: [10.0, 10.0, 1.0]
-        relative_frequency: 1.0
       gnss_common:
         min_elevation: 7.0
         min_SNR: [30.0, 25.0]
-    gnss_loose_estimator_base_options:
+        mw_slip_thres: 0.5
+        gf_slip_thres: 0.05
+        gf_sd_slip_thres: 0.05
+      gnss_error_parameter:
+        code_to_phase_ratio: 1000.0
+        doppler_error_factor: 0.2
     visual_estimator_base_options:
       feature_error_std: 5.0
       stable_feature_error_std: 1.0
@@ -134,10 +138,10 @@ estimate:
       zupt_max_gyro_median: 0.01
       zupt_sigma_zero_velocity: 0.01
     estimator_base_options:
-      max_iteration: 8
+      max_iteration: 5
       num_threads: 4
-      max_solver_time: 0.04
-      verbose_output: true
+      max_solver_time: 0.05
+      verbose_output: false
       solver_type: dense_schur
       trust_region_strategy_type: dogleg
     ambiguity_resolution_options:
@@ -149,7 +153,7 @@ estimate:
     gnss_imu_initializer_options:
       max_iteration: 30
       num_threads: 4
-      max_solver_time: 0.5
+      max_solver_time: 0.05
       gnss_extrinsics: [0.0, -0.43, -0.16]
       gnss_extrinsics_initial_std: [0.0, 0.0, 0.0]
       time_window_length_slow_motion: 0.1
@@ -159,7 +163,6 @@ estimate:
       max_features_per_frame: 100
       max_n_kfs: 100000
       min_disparity_init_landmark: 10.0
-      min_translation_init_landmark: 0.5
       kfselect_min_numkfs: 30
       kfselect_min_disparity: 10.0
       kfselect_min_dist_metric: 0.5
@@ -167,7 +170,6 @@ estimate:
       kfselect_min_dt: 0.5
       detector:
         cell_size: 40
-      initialization:
       camera_parameters:
         label: urbannav-zed2-left
         cameras:

@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[1]
 GICI_MAIN = Path(
     os.environ.get(
@@ -303,6 +305,7 @@ def validate_dataset(ds: Dataset) -> dict[str, Any]:
         "dcb": REPO / ds.dcb,
         "imu": ds.root / "gici_rrr/imu.bin.txt",
         "camera": ds.root / "gici_rrr/camera.bin",
+        "dataset_config": ds.root / "gici_rrr/config.yaml",
         "gici_main": GICI_MAIN,
         "template": TEMPLATE,
     }
@@ -310,22 +313,54 @@ def validate_dataset(ds: Dataset) -> dict[str, Any]:
     return {"dataset": ds.key, "title": ds.title, "checks": checks, "ok": all(c["ok"] for c in checks.values())}
 
 
-def render_config(ds: Dataset, out_dir: Path) -> Path:
+def _streamer_by_tag(config: dict[str, Any], tag: str) -> dict[str, Any]:
+    for item in config["stream"]["streamers"]:
+        streamer = item.get("streamer", {})
+        if streamer.get("tag") == tag:
+            return streamer
+    raise KeyError(f"streamer tag not found: {tag}")
+
+
+def _render_dataset_config(ds: Dataset, out_dir: Path) -> str:
+    cfg = yaml.safe_load((ds.root / "gici_rrr/config.yaml").read_text())
+    _streamer_by_tag(cfg, "str_dcb_file")["path"] = str(REPO / ds.dcb)
+    for tag in ("str_rrr_solution_file", "str_solution_file"):
+        try:
+            _streamer_by_tag(cfg, tag)["path"] = str(out_dir / "output" / "solution.txt")
+            break
+        except KeyError:
+            continue
+
+    if "logging" in cfg:
+        cfg["logging"]["file_directory"] = str(out_dir / "log")
+
+    estimator = cfg["estimate"][0]["estimator"]
+    base_opts = estimator.get("estimator_base_options", {})
+    if "log_intermediate_data_directory" in base_opts:
+        base_opts["log_intermediate_data_directory"] = str(out_dir / "intermediate")
+
+    return yaml.safe_dump(cfg, sort_keys=False)
+
+
+def render_config(ds: Dataset, out_dir: Path, config_source: str) -> Path:
     (out_dir / "output").mkdir(parents=True, exist_ok=True)
-    text = TEMPLATE.read_text()
-    cam_buffer = 672 * 376 + 512
-    repl = {
-        "<ROVER_OBS>": str(ds.root / ds.rover),
-        "<REF_OBS>": str(ds.root / ds.base),
-        "<EPH_NAV>": str(ds.root / ds.eph),
-        "<DCB_FILE>": str(REPO / ds.dcb),
-        "<IMU_FILE>": str(ds.root / "gici_rrr/imu.bin.txt"),
-        "<CAMERA_FILE>": str(ds.root / "gici_rrr/camera.bin"),
-        "<CAM_BUFFER>": str(cam_buffer),
-        "<OUTPUT_DIR>": str(out_dir / "output"),
-    }
-    for k, v in repl.items():
-        text = text.replace(k, v)
+    if config_source == "dataset":
+        text = _render_dataset_config(ds, out_dir)
+    else:
+        text = TEMPLATE.read_text()
+        cam_buffer = 672 * 376 + 512
+        repl = {
+            "<ROVER_OBS>": str(ds.root / ds.rover),
+            "<REF_OBS>": str(ds.root / ds.base),
+            "<EPH_NAV>": str(ds.root / ds.eph),
+            "<DCB_FILE>": str(REPO / ds.dcb),
+            "<IMU_FILE>": str(ds.root / "gici_rrr/imu.bin.txt"),
+            "<CAMERA_FILE>": str(ds.root / "gici_rrr/camera.bin"),
+            "<CAM_BUFFER>": str(cam_buffer),
+            "<OUTPUT_DIR>": str(out_dir / "output"),
+        }
+        for k, v in repl.items():
+            text = text.replace(k, v)
     cfg_path = out_dir / "config.yaml"
     cfg_path.write_text(text)
     return cfg_path
@@ -350,7 +385,7 @@ def run_gici(cfg_path: Path, out_dir: Path, timeout_s: int, skip_run: bool) -> d
     return meta
 
 
-def run_dataset(ds: Dataset, out_root: Path, skip_run: bool) -> dict[str, Any]:
+def run_dataset(ds: Dataset, out_root: Path, skip_run: bool, config_source: str) -> dict[str, Any]:
     out_dir = out_root / ds.key
     out_dir.mkdir(parents=True, exist_ok=True)
     validation = validate_dataset(ds)
@@ -358,7 +393,7 @@ def run_dataset(ds: Dataset, out_root: Path, skip_run: bool) -> dict[str, Any]:
     if not validation["ok"]:
         raise RuntimeError(f"dataset validation failed for {ds.key}")
 
-    cfg_path = render_config(ds, out_dir)
+    cfg_path = render_config(ds, out_dir, config_source)
     meta = run_gici(cfg_path, out_dir, ds.timeout_s, skip_run=skip_run)
     gt = load_ground_truth(ds.root / ds.gt_file)
     metrics = evaluate_solution(out_dir / "output" / "solution.txt", gt, ds.gps_week_day_offset)
@@ -368,6 +403,7 @@ def run_dataset(ds: Dataset, out_root: Path, skip_run: bool) -> dict[str, Any]:
         "title": ds.title,
         "paper_ape_pos_m": paper["pos_m"],
         "paper_ape_rot_deg": paper["rot_deg"],
+        "config_source": config_source,
         "metrics": metrics,
         "meta": meta,
         "solution_lines": sum(1 for _ in (out_dir / "output" / "solution.txt").open()),
@@ -381,6 +417,7 @@ def main() -> int:
     ap.add_argument("datasets", nargs="*", choices=["medium", "deep"], default=["medium", "deep"])
     ap.add_argument("--skip-run", action="store_true")
     ap.add_argument("--validate-only", action="store_true")
+    ap.add_argument("--config-source", choices=["dataset", "wrapper"], default="dataset")
     ap.add_argument("--out-root", type=Path, default=REPO / "results" / "baseline" / "urbannav")
     args = ap.parse_args()
     if args.datasets == ["medium", "deep"] and len(sys.argv) == 1:
@@ -400,7 +437,7 @@ def main() -> int:
                 if not v["ok"]:
                     failures.append(key)
                 continue
-            row = run_dataset(ds, args.out_root, skip_run=args.skip_run)
+            row = run_dataset(ds, args.out_root, skip_run=args.skip_run, config_source=args.config_source)
             results[key] = row
             m = row["metrics"]
             print(
