@@ -32,7 +32,7 @@ fi
 
 case "${DATASET_ID}" in
   1.1|3.1) RTCM_START="${GICI_RTCM_START_TIME:-2023.03.20}" ;;
-  4.1)     RTCM_START="${GICI_RTCM_START_TIME:-2023.03.21}" ;;
+  4.1)     RTCM_START="${GICI_RTCM_START_TIME:-2023.05.21}" ;;
   *)
     echo "Unknown dataset '${DATASET_ID}'." >&2
     exit 1
