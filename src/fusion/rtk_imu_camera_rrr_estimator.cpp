@@ -462,7 +462,12 @@ bool RtkImuCameraRrrEstimator::estimate()
   // Apply marginalization
   marginalization(new_state_type);
 
-  // Shift memory for states and measurements
+  // Shift memory for states and measurements.
+  // Real-time (multi-thread) fix: guard the states_ push/pop with imu_state_mutex_
+  // so the image-frontend thread's getPoseEstimateAt() (which holds the same mutex)
+  // never iterates states_ while the backend is mutating it. Lock order matches
+  // getPoseEstimateAt() -> imuIntegration() (imu_state_mutex_ before imu_mutex_).
+  imu_state_mutex_.lock();
   if (new_state_type == IdType::gPose) {
     gnss_measurement_pairs_.push_back(
       std::make_pair(GnssMeasurement(), GnssMeasurement()));
@@ -478,6 +483,7 @@ bool RtkImuCameraRrrEstimator::estimate()
   }
   // only keep frame measurement data for two epochs
   while (frame_bundles_.size() > 2) frame_bundles_.pop_front();
+  imu_state_mutex_.unlock();
   
   return true;
 }
@@ -492,7 +498,15 @@ void RtkImuCameraRrrEstimator::setInitializationResult(
   std::shared_ptr<GnssImuInitializer> gnss_imu_initializer = 
     std::static_pointer_cast<GnssImuInitializer>(initializer);
   CHECK_NOTNULL(gnss_imu_initializer);
-  
+
+  // Real-time (multi-thread) fix: the image-frontend thread reads states_ and
+  // imu_measurements_ via getPoseEstimateAt() under imu_state_mutex_. Guard the
+  // whole init-result transfer with the same mutex so the frontend never observes
+  // a half-populated estimator (states_ filled but imu_measurements_ still empty),
+  // which otherwise segfaults at imu_measurements_.back(). Lock order
+  // imu_state_mutex_ -> imu_mutex_ matches getPoseEstimateAt()/imuIntegration().
+  imu_state_mutex_.lock();
+
   // Arrange to window length
   ImuMeasurements imu_measurements;
   std::deque<GnssSolution> gnss_measurement_temp;  // we do not use this
@@ -511,6 +525,8 @@ void RtkImuCameraRrrEstimator::setInitializationResult(
   gnss_measurement_pairs_.resize(states_.size());
   ambiguity_states_.resize(states_.size());
   frame_bundles_.push_back(nullptr);
+
+  imu_state_mutex_.unlock();
 }
 
 // Marginalization
