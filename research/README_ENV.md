@@ -1,6 +1,22 @@
 # GICI Research Environment
 
-Branch `research/standard-env` = **chichengcn/gici-open @ f2b8579** (identical core) + wrappers.
+## Branch policy
+
+| Branch | Role | Core vs `f2b8579` |
+|--------|------|-------------------|
+| **`research/standard-env`** | **Upstream-clean reference** — file-mode + ROS2 **postfile** only; paper/locked baselines | **0 delta** (`verify_upstream_fidelity.sh` → OK) |
+| **`research/ros2-realtime-fix`** | **Runtime baseline** — real-time ROS2 bag replay @ rate 1.0; tag **`realtime-safe-v1`** | **1 file** (`rtk_imu_camera_rrr_estimator.cpp` mutex guard) + wrapper/infra only |
+
+**Rules:** Do **not** merge core C++ patches from `ros2-realtime-fix` into `standard-env`. Wrapper/scripts/Eigen pin live on the runtime branch only.
+
+```bash
+git checkout research/standard-env          # reproduce Table V / locked metrics
+git checkout research/ros2-realtime-fix     # bag replay + stress tests
+```
+
+---
+
+Branch `research/standard-env` = **chichengcn/gici-open @ f2b8579** (identical core) + wrappers on that branch; runtime work stays on `research/ros2-realtime-fix`.
 
 - [`BASELINE_LOCK.md`](BASELINE_LOCK.md) — locked metrics and commands
 - [`docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`](../docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md) — **primary** UrbanNav RRR baseline
@@ -78,6 +94,8 @@ Results: `results/baseline/gici_board/<id>/` (file-mode),
 `evaluation/ape_metrics.json`.
 
 ## Real-time ROS2 bag replay (GICI board)
+
+> **Branch:** `research/ros2-realtime-fix` only — **not** on `research/standard-env`.
 
 Hybrid pipeline (avoids `gici_files_to_rosbag` segfault on ephemeris):
 
