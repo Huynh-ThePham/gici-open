@@ -5,6 +5,8 @@
 
 Branch `research/standard-env` = upstream GICI @ `f2b8579` + research wrappers only (`research/`, `scripts/`).
 
+**Sibling branch:** `research/ros2-realtime-fix` = runtime bag replay (tag `realtime-safe-v1`); contains one core mutex patch — keep out of `standard-env`.
+
 See `research/AUTHOR_METHODOLOGY.md`, `research/UPSTREAM_FIDELITY.md`,
 `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`.
 

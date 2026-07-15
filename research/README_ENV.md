@@ -1,6 +1,17 @@
 # GICI Research Environment
 
-Branch `research/standard-env` = **chichengcn/gici-open @ f2b8579** (identical core) + wrappers.
+## Branch policy
+
+| Branch | Role | Core vs `f2b8579` |
+|--------|------|-------------------|
+| **`research/standard-env`** (this branch) | **Upstream-clean reference** — file-mode + ROS2 **postfile**; locked Table V baselines | **0 delta** — run `./scripts/verify_upstream_fidelity.sh` |
+| **`research/ros2-realtime-fix`** | **Runtime baseline** — real-time bag replay; tag `realtime-safe-v1` | 1 core mutex patch + wrapper/infra — **do not merge into this branch** |
+
+Real-time bag replay, stress tests, and hybrid bag configs live only on `research/ros2-realtime-fix`.
+
+---
+
+Branch `research/standard-env` = **chichengcn/gici-open @ f2b8579** (identical core) + research wrappers/scripts.
 
 - [`BASELINE_LOCK.md`](BASELINE_LOCK.md) — locked metrics and commands
 - [`docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`](../docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md) — **primary** UrbanNav RRR baseline
