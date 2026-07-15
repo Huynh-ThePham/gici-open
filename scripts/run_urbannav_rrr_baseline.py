@@ -6,6 +6,10 @@ Uses research/config/rtk_imu_camera_rrr_urbannav.yaml derived from:
   - ros_wrapper/.../ros_urbannav.yaml RRR block
 
 Does NOT use UrbanNavDataset/gici_rrr/config.yaml or any paper1 fork.
+
+Watchdog (default on): stops gici_main with SIGINT when solution.txt stops growing
+for URBANNAV_FILEMODE_STABLE_SECONDS (default 90s) after min GPGGA count is met.
+Disable: --no-watchdog or URBANNAV_FILEMODE_WATCH=0.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import argparse
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -31,7 +36,9 @@ GICI_MAIN = Path(
     )
 )
 TEMPLATE = REPO / "research" / "config" / "rtk_imu_camera_rrr_urbannav.yaml"
-DATA_ROOT = Path("/home/theph/Downloads/UrbanNavDataset-master")
+
+_DEFAULT_DATA_ROOT = Path("/media/theph/Data1/Research/dataset/UrbanNavDataset")
+DATA_ROOT = Path(os.environ.get("URBANNAV_DATA_ROOT", str(_DEFAULT_DATA_ROOT)))
 GPS_UTC_LEAP_SECONDS = 18.0
 WGS84_A = 6378137.0
 WGS84_F = 1.0 / 298.257223563
@@ -55,6 +62,7 @@ class Dataset:
     eph: str
     dcb: str
     timeout_s: int
+    min_gpgga_epochs: int
 
 
 DATASETS: dict[str, Dataset] = {
@@ -69,6 +77,7 @@ DATASETS: dict[str, Dataset] = {
         eph="gnss/base/brdc1370.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
         timeout_s=7200,
+        min_gpgga_epochs=6500,
     ),
     "deep": Dataset(
         key="deep",
@@ -82,6 +91,7 @@ DATASETS: dict[str, Dataset] = {
         eph="gnss/base/_deprecated/brdc_mn.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211410000_01D_01D_DCB.BSX",
         timeout_s=10800,
+        min_gpgga_epochs=1400,
     ),
 }
 
@@ -292,6 +302,8 @@ def evaluate_solution(solution: Path, gt: dict[str, list[Any]], gps_week_day_off
         "rmse_u_m": rmse(u_vals),
         "yaw_rmse_deg": rmse(yaw_err_vals) if yaw_err_vals else None,
         "fixed_rate": quality_counts.get(4, 0) / len(epochs),
+        "float_rate": quality_counts.get(5, 0) / len(epochs),
+        "single_rate": quality_counts.get(1, 0) / len(epochs),
         "quality_counts": {str(k): v for k, v in sorted(quality_counts.items())},
     }
 
@@ -366,26 +378,158 @@ def render_config(ds: Dataset, out_dir: Path, config_source: str) -> Path:
     return cfg_path
 
 
-def run_gici(cfg_path: Path, out_dir: Path, timeout_s: int, skip_run: bool) -> dict[str, Any]:
+def count_gpgga(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    n = 0
+    with path.open(errors="replace") as fp:
+        for line in fp:
+            if line.startswith("$GPGGA,"):
+                n += 1
+    return n
+
+
+def _log_has_fatal(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    text = path.read_text(errors="replace")
+    return any(
+        marker in text
+        for marker in (
+            "Check failed:",
+            "segment fault",
+            "Segmentation fault",
+            "FATAL",
+            "core dumped",
+            "Aborted at",
+            "terminate called",
+        )
+    )
+
+
+def _watchdog_settings(ds: Dataset | None, use_watchdog: bool) -> dict[str, float | int | bool]:
+    enabled = use_watchdog and os.environ.get("URBANNAV_FILEMODE_WATCH", "1") != "0"
+    default_min = ds.min_gpgga_epochs if ds else 5000
+    return {
+        "enabled": enabled,
+        "interval_s": float(os.environ.get("URBANNAV_FILEMODE_WATCH_INTERVAL", "10")),
+        "stable_s": float(os.environ.get("URBANNAV_FILEMODE_STABLE_SECONDS", "90")),
+        "min_gpgga": int(os.environ.get("URBANNAV_FILEMODE_MIN_GPGGA", str(default_min))),
+        "progress_every_s": float(os.environ.get("URBANNAV_FILEMODE_PROGRESS_EVERY", "30")),
+    }
+
+
+def run_gici(
+    cfg_path: Path,
+    out_dir: Path,
+    timeout_s: int,
+    skip_run: bool,
+    *,
+    ds: Dataset | None = None,
+    use_watchdog: bool = True,
+) -> dict[str, Any]:
     sol = out_dir / "output" / "solution.txt"
     log_path = out_dir / "run.log"
     if skip_run and sol.is_file() and sol.stat().st_size > 0:
         return {"skipped_run": True}
     if sol.exists():
         sol.unlink()
+
+    wd = _watchdog_settings(ds, use_watchdog)
     t0 = time.time()
-    cmd = ["timeout", "-s", "INT", str(timeout_s), str(GICI_MAIN), str(cfg_path)]
+    cmd = [str(GICI_MAIN), str(cfg_path)]
+    meta: dict[str, Any] = {"skipped_run": False, "watchdog": wd}
+
     with log_path.open("w") as log_fp:
-        proc = subprocess.run(cmd, stdout=log_fp, stderr=subprocess.STDOUT, cwd=str(REPO), check=False)
-    meta = {"exit_code": proc.returncode, "wall_s": time.time() - t0, "skipped_run": False}
-    if proc.returncode not in (0, 124, 130, -6, 134) and (not sol.is_file() or sol.stat().st_size == 0):
-        raise RuntimeError(f"gici_main failed exit={proc.returncode}; see {log_path}")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_fp,
+            stderr=subprocess.STDOUT,
+            cwd=str(REPO),
+            start_new_session=True,
+        )
+        stable_elapsed = 0.0
+        prev_gpgga = -1
+        prev_size = -1
+        next_progress = t0 + float(wd["progress_every_s"])
+
+        try:
+            while proc.poll() is None:
+                now = time.time()
+                elapsed = now - t0
+                if elapsed >= timeout_s:
+                    print(
+                        f"  [watchdog] max timeout {timeout_s}s reached; sending SIGINT",
+                        flush=True,
+                    )
+                    os.killpg(proc.pid, signal.SIGINT)
+                    break
+
+                time.sleep(float(wd["interval_s"]))
+
+                if _log_has_fatal(log_path):
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    raise RuntimeError(f"gici_main fatal error; see {log_path}")
+
+                gpgga = count_gpgga(sol)
+                size = sol.stat().st_size if sol.is_file() else 0
+
+                if now >= next_progress:
+                    print(
+                        f"  [watchdog] elapsed={elapsed:.0f}s gpgga={gpgga} "
+                        f"stable={stable_elapsed:.0f}/{wd['stable_s']:.0f}s",
+                        flush=True,
+                    )
+                    next_progress = now + float(wd["progress_every_s"])
+
+                if not wd["enabled"]:
+                    prev_gpgga, prev_size = gpgga, size
+                    continue
+
+                if gpgga >= int(wd["min_gpgga"]) and gpgga == prev_gpgga:
+                    stable_elapsed += float(wd["interval_s"])
+                    if stable_elapsed >= float(wd["stable_s"]):
+                        print(
+                            f"  [watchdog] solution stable {stable_elapsed:.0f}s "
+                            f"(gpgga={gpgga} >= {wd['min_gpgga']}); sending SIGINT",
+                            flush=True,
+                        )
+                        os.killpg(proc.pid, signal.SIGINT)
+                        meta["watchdog_stopped"] = True
+                        meta["watchdog_gpgga"] = gpgga
+                        break
+                else:
+                    stable_elapsed = 0.0
+
+                prev_gpgga, prev_size = gpgga, size
+
+            try:
+                proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+        except KeyboardInterrupt:
+            os.killpg(proc.pid, signal.SIGINT)
+            proc.wait(timeout=30)
+
+    meta["exit_code"] = proc.returncode if proc.returncode is not None else -1
+    meta["wall_s"] = time.time() - t0
+    ok_exits = {0, 124, 130, -2, -6, 134, -15}
+    if meta["exit_code"] not in ok_exits and (not sol.is_file() or sol.stat().st_size == 0):
+        raise RuntimeError(f"gici_main failed exit={meta['exit_code']}; see {log_path}")
     if not sol.is_file() or sol.stat().st_size == 0:
         raise RuntimeError(f"no solution.txt; see {log_path}")
     return meta
 
 
-def run_dataset(ds: Dataset, out_root: Path, skip_run: bool, config_source: str) -> dict[str, Any]:
+def run_dataset(
+    ds: Dataset,
+    out_root: Path,
+    skip_run: bool,
+    config_source: str,
+    use_watchdog: bool = True,
+) -> dict[str, Any]:
     out_dir = out_root / ds.key
     out_dir.mkdir(parents=True, exist_ok=True)
     validation = validate_dataset(ds)
@@ -394,7 +538,7 @@ def run_dataset(ds: Dataset, out_root: Path, skip_run: bool, config_source: str)
         raise RuntimeError(f"dataset validation failed for {ds.key}")
 
     cfg_path = render_config(ds, out_dir, config_source)
-    meta = run_gici(cfg_path, out_dir, ds.timeout_s, skip_run=skip_run)
+    meta = run_gici(cfg_path, out_dir, ds.timeout_s, skip_run=skip_run, ds=ds, use_watchdog=use_watchdog)
     gt = load_ground_truth(ds.root / ds.gt_file)
     metrics = evaluate_solution(out_dir / "output" / "solution.txt", gt, ds.gps_week_day_offset)
     paper = PAPER_APE[ds.key]
@@ -416,8 +560,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="UrbanNav upstream RRR baseline")
     ap.add_argument("datasets", nargs="*", choices=["medium", "deep"], default=["medium", "deep"])
     ap.add_argument("--skip-run", action="store_true")
+    ap.add_argument(
+        "--no-watchdog",
+        action="store_true",
+        help="Disable solution-stable watchdog (legacy timeout-only behaviour)",
+    )
     ap.add_argument("--validate-only", action="store_true")
-    ap.add_argument("--config-source", choices=["dataset", "wrapper"], default="dataset")
+    ap.add_argument(
+        "--config-source",
+        choices=["dataset", "wrapper"],
+        default="wrapper",
+        help="wrapper = research/config/rtk_imu_camera_rrr_urbannav.yaml (canonical); "
+        "dataset = UrbanNav gici_rrr/config.yaml (deprecated, do not use for new work)",
+    )
     ap.add_argument("--out-root", type=Path, default=REPO / "results" / "baseline" / "urbannav")
     args = ap.parse_args()
     if args.datasets == ["medium", "deep"] and len(sys.argv) == 1:
@@ -437,13 +592,24 @@ def main() -> int:
                 if not v["ok"]:
                     failures.append(key)
                 continue
-            row = run_dataset(ds, args.out_root, skip_run=args.skip_run, config_source=args.config_source)
+            row = run_dataset(
+                ds,
+                args.out_root,
+                skip_run=args.skip_run,
+                config_source=args.config_source,
+                use_watchdog=not args.no_watchdog,
+            )
             results[key] = row
             m = row["metrics"]
             print(
                 f"  rmse_h={m['rmse_h_m']:.3f} m  yaw_rmse={m['yaw_rmse_deg']:.3f}°  "
                 f"matched={m['n_matched']}  fixed={100*m['fixed_rate']:.1f}%  "
-                f"wall={row['meta'].get('wall_s', 0):.0f}s",
+                f"wall={row['meta'].get('wall_s', 0):.0f}s"
+                + (
+                    "  watchdog=1"
+                    if row["meta"].get("watchdog_stopped")
+                    else ""
+                ),
                 flush=True,
             )
             print(

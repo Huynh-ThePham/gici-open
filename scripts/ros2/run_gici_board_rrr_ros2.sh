@@ -30,14 +30,8 @@ if [[ -z "${DATASET_ID}" ]]; then
   exit 1
 fi
 
-case "${DATASET_ID}" in
-  1.1|3.1) RTCM_START="${GICI_RTCM_START_TIME:-2023.03.20}" ;;
-  4.1)     RTCM_START="${GICI_RTCM_START_TIME:-2023.05.21}" ;;
-  *)
-    echo "Unknown dataset '${DATASET_ID}'." >&2
-    exit 1
-    ;;
-esac
+# RTCM start date resolved from the single source of truth in dataset_paths.sh.
+RTCM_START="${GICI_RTCM_START_TIME:-$(gici_rtcm_start_for "${DATASET_ID}")}"
 
 DATASET_DIR="${GICI_DATA_ROOT}/${DATASET_ID}"
 OUT_DIR="${REPO}/output/ros2_gici_board/${DATASET_ID}"

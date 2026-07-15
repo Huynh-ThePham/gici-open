@@ -2,7 +2,9 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-DATASET_DIR="${GICI_DATASET_1_1:-/home/theph/ws_ncs/1.1}"
+# shellcheck source=dataset_paths.sh
+source "${ROOT_DIR}/scripts/dataset_paths.sh"
+DATASET_DIR="${GICI_DATASET_1_1}"
 OUT_DIR="${GICI_BASELINE_OUT:-${ROOT_DIR}/results/baseline/1_1}"
 LOG_DIR="${GICI_BASELINE_LOG:-${ROOT_DIR}/logs/baseline/1_1}"
 TEMPLATE="${ROOT_DIR}/research/config/rtk_imu_camera_rrr_1_1.yaml"

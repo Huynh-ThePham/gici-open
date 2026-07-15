@@ -1,0 +1,19 @@
+{
+  "dataset": "3.1",
+  "scene": "typical-urban",
+  "algorithm": "rtk_imu_camera_rrr",
+  "upstream_commit": "f2b8579",
+  "paper_reference": {
+    "citation": "Chi et al. 2023, Table V — RTK RRR",
+    "ape_position_m": 0.29,
+    "ape_rotation_deg": 1.58
+  },
+  "paper_tolerance": {
+    "ape_translation_rmse_m": 0.35,
+    "ape_rotation_rmse_deg": 0.35
+  },
+  "tolerance": {
+    "ape_translation_rmse_m": 0.05,
+    "ape_rotation_rmse_deg": 0.15
+  }
+}

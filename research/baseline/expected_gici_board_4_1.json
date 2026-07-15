@@ -1,0 +1,20 @@
+{
+  "dataset": "4.1",
+  "scene": "dense-urban",
+  "algorithm": "rtk_imu_camera_rrr",
+  "upstream_commit": "f2b8579",
+  "paper_reference": {
+    "citation": "Chi et al. 2023, Table V — RTK RRR",
+    "ape_position_m": 0.08,
+    "ape_rotation_deg": 0.54
+  },
+  "paper_tolerance": {
+    "ape_translation_rmse_m": 0.35,
+    "ape_rotation_rmse_deg": 0.35
+  },
+  "tolerance": {
+    "ape_translation_rmse_m": 0.05,
+    "ape_rotation_rmse_deg": 0.15
+  },
+  "notes": "Set GICI_RTCM_START_TIME=2023.05.21 for RTCM reference/ephemeris decode (dataset collection date)."
+}

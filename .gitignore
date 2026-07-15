@@ -61,12 +61,14 @@ ros_wrapper/src/CMakeLists.txt
 *_with_passward.yaml
 data*/
 !data/
+data/*
 !data/.gitkeep
-results/
-!results/
+# results/ and logs/ hold regenerable run artifacts (raw solutions, gt_pipeline
+# intermediates, run logs). Keep only the .gitkeep; locked metrics live in
+# research/baseline/expected_*.json and the *.md docs.
+results/*
 !results/.gitkeep
-logs/
-!logs/
+logs/*
 !logs/.gitkeep
 bin/
 lib/

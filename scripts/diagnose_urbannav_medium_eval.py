@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -51,7 +52,11 @@ def main() -> int:
     args = ap.parse_args()
 
     mod = load_baseline_module()
-    root = Path("/home/theph/Downloads/UrbanNavDataset-master/UrbanNav-HK-Medium-Urban-1")
+    data_root = Path(os.environ.get(
+        "URBANNAV_DATA_ROOT",
+        "/media/theph/Data1/Research/dataset/UrbanNavDataset",
+    ))
+    root = data_root / "UrbanNav-HK-Medium-Urban-1"
     gt = mod.load_ground_truth(root / "UrbanNav_TST_GT_raw.txt")
     solution = args.out_dir / "output/solution.txt"
     eval_dir = args.out_dir / "evaluation"
@@ -98,7 +103,8 @@ def main() -> int:
     report["interpretation"] = {
         "diagnostic_only": True,
         "position_note": (
-            "Paper 3.40 m matches supplementary tst_rmse_h_m, not author evo_ape 3D on Medium."
+            "Author APE = evo_ape 3D Sim(3) on full solution (README §4). "
+            "Medium early vertical bias inflates 3D APE; see tst_rmse_h / tst_rmse_u for diagnosis."
         ),
         "vertical_bias_m": report.get("tst_u_bias_mean_m"),
         "rotation_note": (

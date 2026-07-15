@@ -49,7 +49,8 @@ Authors do **not** publish an UrbanNav eval script @ f2b8579. Paper Table V repo
 |------|---------------------|---------------------|--------|
 | Ground truth input | `ground_truth.txt` (IE, fiber IMU) | `urbannav_gt_to_ie.py` on TST / Whampoa raw | UrbanNav GT is not IE format |
 | Frame transform | `nmea_pose_to_pose` | **Skip** | TST GT is already body (= IMU). Fiber extrinsics break attitude ~180° |
-| Timestamp align | `nmea_align_timestamp` high-rate GT → solution | `urbannav_interp_gt_to_solution.py` then align | Tool requires 1st file ≥ 2nd rate; GT is 1 Hz, solution ~10 Hz |
+| Timestamp align | `nmea_align_timestamp` high-rate GT → solution | `urbannav_interp_gt_to_solution.py` then `nmea_align_timestamp` | Tool requires 1st file ≥ 2nd rate; GT is 1 Hz, solution ~10 Hz |
+| TUM conversion | upstream `nmea_to_tum` | Same (Shanghai ref; `evo_ape --align` handles frame) | README §4 |
 | Compare | `evo_ape` Sim(3) | Same | Paper Table V APE |
 
 ```bash
@@ -57,7 +58,7 @@ Authors do **not** publish an UrbanNav eval script @ f2b8579. Paper Table V repo
 ./scripts/run_author_eval_urbannav.sh deep
 ```
 
-Pass criteria match `run_author_eval_1_1.sh`: reproduce locked `evo_ape` values within tolerance in `research/baseline/expected_urbannav_*.json`.
+Pass criteria match `run_author_eval_1_1.sh`: reproduce locked `evo_ape` values within tolerance in `research/baseline/expected_urbannav_*.json`. **No** `tst_rmse_h` substitution for medium.
 
 Supplementary smoke metric (not author APE): horizontal `rmse_h` from `scripts/run_urbannav_rrr_baseline.py` — useful for quick checks only.
 
@@ -69,6 +70,8 @@ Use the author's **two** upstream references:
 2. **UrbanNav calib / RRR tuning:** `ros_wrapper/src/gici/option/ros_urbannav.yaml` (commented RRR block)
 
 Research wrapper: `research/config/rtk_imu_camera_rrr_urbannav.yaml`.
+
+**Locked manifest:** `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md` (tag `filemode-full-rrr-v1`).
 
 **Ignore** `UrbanNavDataset/.../gici_rrr/config.yaml` in the dataset download — it is not from `chichengcn/gici-open` and uses wrong GICI-board lever arms.
 

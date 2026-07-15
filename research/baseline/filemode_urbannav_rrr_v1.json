@@ -1,0 +1,112 @@
+{
+  "baseline_tag": "filemode-full-rrr-v1",
+  "freeze_date": "2026-07-14",
+  "algorithm": "rtk_imu_camera_rrr",
+  "interface": "post-file",
+  "binary": "build/gici_main",
+  "build_type": "Release",
+  "upstream": {
+    "repo": "chichengcn/gici-open",
+    "commit": "f2b8579",
+    "commit_message": "Sample configurations for post estimation.",
+    "verify_command": "./scripts/verify_upstream_fidelity.sh"
+  },
+  "config": {
+    "template": "research/config/rtk_imu_camera_rrr_urbannav.yaml",
+    "template_sha256": "e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4",
+    "canonical_source": "wrapper",
+    "invalid_sources": [
+      "UrbanNavDataset/.../gici_rrr/config.yaml"
+    ],
+    "upstream_derivation": {
+      "io_template": {
+        "path": "option/post_estimation_RTK_RRR_rinex_imutext.yaml",
+        "sha256": "adcccd0e0a0c48383ad5761158bd7d363d339180e22136910d67e49e3a86a947"
+      },
+      "estimator_template": {
+        "path": "ros_wrapper/src/gici/option/ros_urbannav.yaml",
+        "block": "RRR lines 395-518 (commented in upstream)",
+        "sha256": "c0ac1cb8521497952c142288d9455eaa093351b4997c9d4912d2641d96c2c465"
+      }
+    },
+    "key_estimator_fields": {
+      "output_align_tag": "str_imu_file",
+      "output_downsample_rate": 40,
+      "enable_input_align": true,
+      "input_align_latency": 0.2,
+      "max_keyframes": 20,
+      "use_ambiguity_resolution": true,
+      "gnss_extrinsics": [0.0, -0.43, -0.16],
+      "body_to_imu_rotation": [0.0, 0.0, 0.0],
+      "camera": "672x376 ZED2 left, pinhole intrinsics from ros_urbannav.yaml"
+    }
+  },
+  "datasets": {
+    "medium": {
+      "title": "UrbanNav-HK-Medium-Urban-1",
+      "scene_dir": "UrbanNav-HK-Medium-Urban-1",
+      "inputs": {
+        "rover": "gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs",
+        "base": "gnss/base/hkkt137g.rnx",
+        "eph": "gnss/base/brdc1370.rnx",
+        "dcb": {
+          "path": "research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
+          "sha256": "bedb4df5fe2d351836baf42da7828359b2eb68b01fe308c52430af609e2fcbf5"
+        },
+        "imu": "gici_rrr/imu.bin.txt",
+        "camera": "gici_rrr/camera.bin",
+        "camera_buffer_length": 254464,
+        "gt": "UrbanNav_TST_GT_raw.txt"
+      },
+      "gps_week_day_offset": 86400.0,
+      "locked": {
+        "config_source": "wrapper",
+        "lock_date": "2026-07-14",
+        "ape_translation_rmse_m": 3.214458,
+        "ape_rotation_rmse_deg": 6.32456,
+        "expected_file": "research/baseline/expected_urbannav_medium.json",
+        "solution_gpgga_epochs": 1490,
+        "author_eval_matched_poses": 1489,
+        "gici_main_exit_code": -6
+      }
+    },
+    "deep": {
+      "title": "UrbanNav-HK-Deep-Urban-1",
+      "scene_dir": "UrbanNav-HK-Deep-Urban-1",
+      "inputs": {
+        "rover": "gnss/UrbanNav-HK-Deep-Urban-1.ublox.f9p.splitter.obs",
+        "base": "gnss/base/_deprecated/hkkt141g.21o",
+        "base_note": "5 s session-aligned base; full-day hkkt141g.rnx gives ~13 m horizontal error",
+        "eph": "gnss/base/_deprecated/brdc_mn.rnx",
+        "dcb": {
+          "path": "research/dcb/CAS0MGXRAP_20211410000_01D_01D_DCB.BSX",
+          "sha256": "9a9868a457182aee63737b8be074937572e7b91ae9316e6574579d56c14f5792"
+        },
+        "imu": "gici_rrr/imu.bin.txt",
+        "camera": "gici_rrr/camera.bin",
+        "camera_buffer_length": 254464,
+        "gt": "UrbanNav_whampoa_raw.txt"
+      },
+      "gps_week_day_offset": 432000.0,
+      "locked": {
+        "config_source": "wrapper",
+        "lock_date": "2026-07-14",
+        "ape_translation_rmse_m": 0.334531,
+        "ape_rotation_rmse_deg": 0.924817,
+        "expected_file": "research/baseline/expected_urbannav_deep.json",
+        "solution_gpgga_epochs": 2230,
+        "author_eval_matched_poses": 2229,
+        "gici_main_exit_code": -6
+      }
+    }
+  },
+  "commands": {
+    "run_medium": "python3 scripts/run_urbannav_rrr_baseline.py medium --config-source wrapper",
+    "run_deep": "python3 scripts/run_urbannav_rrr_baseline.py deep --config-source wrapper",
+    "eval_medium": "./scripts/run_author_eval_urbannav.sh medium",
+    "eval_deep": "./scripts/run_author_eval_urbannav.sh deep"
+  },
+  "exit_codes_whitelist": [0, 124, 130, -6, 134],
+  "ros2_mirror": "ros2_wrapper/src/gici_ros2/config/ros_urbannav_rrr_upstream_equivalent.yaml",
+  "documentation": "docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md"
+}
