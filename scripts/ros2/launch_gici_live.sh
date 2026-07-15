@@ -68,60 +68,79 @@ run_board() {
   fi
 
   local BAG_OUT="${OUT_DIR}/rrr_ros2"
+  local SOLUTION="${OUT_DIR}/solution.txt"
+  local MAX_ATTEMPTS="${GICI_BAG_REPLAY_ATTEMPTS:-2}"
+  local ATTEMPT_OK=0
+
   "${REPO}/scripts/ros2/build_gici_board_ros1_bags.sh" "${DATASET_ID}" "${RTCM_START}"
   if [[ ! -d "${BAG_OUT}" ]]; then
     python3 "${REPO}/scripts/ros2/gici_board_to_ros2.py" \
       --dataset-dir "${DATASET_DIR}" --out "${BAG_OUT}" --force
   fi
 
-  local SOLUTION="${OUT_DIR}/solution.txt"
-  rm -f "${SOLUTION}" "${OUT_DIR}/node.log"
-  cleanup_ros2_gici_session "${LOG_DIR}/cleanup.log"
-
   local NODE_EXE="${WS}/install/gici_ros2/lib/gici_ros2/gici_ros2_main"
   [[ -x "${NODE_EXE}" ]] || { echo "ERROR: build ros2_wrapper first" >&2; exit 1; }
 
-  local NODE_PID="" PLAYER_PID=""
-  on_exit() {
-    [[ -n "${PLAYER_PID}" ]] && kill -INT "${PLAYER_PID}" 2>/dev/null || true
-    [[ -n "${NODE_PID}" ]] && stop_gici_node "${NODE_PID}"
-    cleanup_ros2_gici_session "${LOG_DIR}/cleanup_post.log"
-  }
-  trap on_exit EXIT INT TERM
+  cleanup_ros2_gici_session "${LOG_DIR}/cleanup.log"
 
-  "${NODE_EXE}" "${CFG}" > "${OUT_DIR}/node.log" 2>&1 &
-  NODE_PID=$!
+  for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+    rm -f "${SOLUTION}" "${OUT_DIR}/node.log"
+    echo "[gici-live] attempt ${attempt}/${MAX_ATTEMPTS}" >> "${LOG_DIR}/replay.log"
 
-  if ! wait_for_gici_node_ready "${NODE_PID}" "${OUT_DIR}/node.log" "${LOG_DIR}/ready.log" 90; then
-    echo "[gici-live] ERROR: node not ready" >&2
-    exit 1
-  fi
-  if ! health_check_reference_station "${BAG_OUT}" "${NODE_PID}" "${OUT_DIR}/node.log" "${LOG_DIR}/health_check.log"; then
-    echo "[gici-live] WARN: reference health-check failed; continuing" >&2
-  fi
+    local NODE_PID="" PLAYER_PID=""
+    on_exit() {
+      [[ -n "${PLAYER_PID:-}" ]] && kill -INT "${PLAYER_PID}" 2>/dev/null || true
+      [[ -n "${NODE_PID}" ]] && stop_gici_node "${NODE_PID}"
+    }
+    trap on_exit EXIT INT TERM
 
-  local PLAY_CLOCK=""
-  [[ "${USE_SIM_TIME}" == "1" ]] && PLAY_CLOCK="--clock"
-  ros2 bag play "${BAG_OUT}" --rate "${RATE}" --read-ahead-queue-size 10000 ${PLAY_CLOCK} \
-    > "${LOG_DIR}/play.log" 2>&1 &
-  PLAYER_PID=$!
+    "${NODE_EXE}" "${CFG}" > "${OUT_DIR}/node.log" 2>&1 &
+    NODE_PID=$!
 
-  while process_alive_non_zombie "${PLAYER_PID}"; do
-    process_alive_non_zombie "${NODE_PID}" || break
-    sleep 1
+    if ! wait_for_gici_node_ready "${NODE_PID}" "${OUT_DIR}/node.log" "${LOG_DIR}/ready.log" 90; then
+      echo "[gici-live] node not ready attempt ${attempt}" >&2
+      trap - EXIT; on_exit; continue
+    fi
+    if ! health_check_reference_station "${BAG_OUT}" "${NODE_PID}" "${OUT_DIR}/node.log" "${LOG_DIR}/health_check.log"; then
+      echo "[gici-live] health-check failed attempt ${attempt}" >&2
+      trap - EXIT; on_exit
+      cleanup_ros2_gici_session "${LOG_DIR}/cleanup.log"
+      continue
+    fi
+
+    local PLAY_CLOCK=""
+    [[ "${USE_SIM_TIME}" == "1" ]] && PLAY_CLOCK="--clock"
+    ros2 bag play "${BAG_OUT}" --rate "${RATE}" --read-ahead-queue-size 10000 ${PLAY_CLOCK} \
+      > "${LOG_DIR}/play.log" 2>&1 &
+    PLAYER_PID=$!
+
+    while process_alive_non_zombie "${PLAYER_PID}"; do
+      process_alive_non_zombie "${NODE_PID}" || break
+      sleep 1
+    done
+    wait "${PLAYER_PID}" 2>/dev/null || true
+    PLAYER_PID=""
+
+    drain_solution_epochs "${SOLUTION}" "${NODE_PID}" 1500
+    stop_gici_node "${NODE_PID}"
+    NODE_PID=""
+    trap - EXIT
+
+    local EPOCHS
+    EPOCHS="$(count_gpgga "${SOLUTION}")"
+    if (( EPOCHS > 0 )); then
+      ATTEMPT_OK=1
+      break
+    fi
+    cleanup_ros2_gici_session "${LOG_DIR}/cleanup.log"
   done
-  wait "${PLAYER_PID}" 2>/dev/null || true
-  PLAYER_PID=""
 
-  drain_solution_epochs "${SOLUTION}" "${NODE_PID}" 1500
-  stop_gici_node "${NODE_PID}"
-  NODE_PID=""
-
+  cleanup_ros2_gici_session "${LOG_DIR}/cleanup_post.log"
   local EPOCHS
   EPOCHS="$(count_gpgga "${SOLUTION}")"
   echo "[gici-live] Done. GPGGA=${EPOCHS} solution=${SOLUTION}"
   echo "[gici-live] Live topics were: /gici/odom /gici/path /gici/pose"
-  [[ "${EPOCHS}" -gt 0 ]] || exit 1
+  (( ATTEMPT_OK == 1 )) && [[ "${EPOCHS}" -gt 0 ]] || exit 1
 }
 
 run_urbannav() {

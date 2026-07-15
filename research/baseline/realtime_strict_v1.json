@@ -1,0 +1,37 @@
+{
+  "version": "realtime_strict_v1",
+  "dataset": "1.1",
+  "algorithm": "rtk_imu_camera_rrr",
+  "mode": "ros2_bag_replay_rate1.0",
+  "description": "Strict realtime pass criteria for gici_ros2_standard_interface stress runs.",
+  "criteria": {
+    "min_gpgga_epochs": 1700,
+    "max_ape_translation_rmse_m": 0.20,
+    "max_ape_rotation_rmse_deg": 1.0,
+    "no_segfault": true,
+    "no_timeout": true,
+    "full_trajectory": true
+  },
+  "validated": {
+    "worktree": "gici_ros2_standard_interface",
+    "branch": "research/ros2-standard-interface",
+    "stress_suffix": "std_batch30_strict",
+    "date": "2026-07-16",
+    "runs": 30,
+    "all_strict_pass": "26/30",
+    "no_segfault": "30/30",
+    "full_trajectory": "30/30",
+    "ape_pos_ok": "30/30",
+    "ape_pos_median_m": 0.1302,
+    "ape_rot_median_deg": 0.547,
+    "failed_runs": ["007", "009", "013", "024"]
+  },
+  "reference_batch30_v2": {
+    "worktree": "gici_research_standard",
+    "legacy_max_ape_pos_m": 0.25,
+    "all_pass_legacy": "27/30",
+    "ape_pos_median_m": 0.1437,
+    "note": "Legacy criteria did not check rotation RMSE."
+  },
+  "note": "File-mode locked ~0.029m is NOT a realtime target; use postfile baseline separately."
+}
