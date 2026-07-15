@@ -48,6 +48,11 @@ devel/
 # others
 trash/
 test/
+
+# Core dumps
+core
+core.[0-9]*
+
 third_party/eigen/
 third_party/glog/
 third_party/opencv/
