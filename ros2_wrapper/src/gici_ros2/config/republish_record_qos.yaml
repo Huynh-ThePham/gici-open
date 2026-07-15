@@ -1,0 +1,32 @@
+# rosbag2 QoS override for recording the RINEX republish topics.
+#
+# The republish node publishes with reliable + keep_all + transient_local, which
+# RETAINS the full history. For `ros2 bag record` to receive that retained
+# history when it joins AFTER the node, its subscription must also request
+# transient_local (a volatile subscriber only sees messages published after it
+# joins, i.e. nothing, since the node already published everything). Used via:
+#   ros2 bag record --qos-profile-overrides-path <this file> <topics...>
+/gici/gnss_rover/observations:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/gici/gnss_reference/observations:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/gici/gnss_reference/antenna_position:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/gici/gnss_ephemeris/ephemerides:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/gici/gnss_ephemeris/ionosphere_parameter:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
+/gici/gnss_dcb/code_bias:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local

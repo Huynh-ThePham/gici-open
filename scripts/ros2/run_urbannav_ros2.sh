@@ -39,10 +39,25 @@ esac
 OUT_DIR="${REPO}/output/ros2_urbannav/${DS}"
 BAG_OUT="${OUT_DIR}/gnss_ros2"
 mkdir -p "${OUT_DIR}/log"
+export ROS_LOG_DIR="${OUT_DIR}/log/ros2"
+mkdir -p "${ROS_LOG_DIR}"
 
-# ROS environment
+NODE_PID=""
+cleanup_node() {
+  if [[ -n "${NODE_PID}" ]] && kill -0 "${NODE_PID}" 2>/dev/null; then
+    kill -INT "${NODE_PID}" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "${NODE_PID}" 2>/dev/null || return; sleep 0.5; done
+    kill -9 "${NODE_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup_node EXIT
+
+# ROS setup scripts reference unbound trace variables, so do not source them
+# while nounset is active.
+set +u
 source /opt/ros/humble/setup.bash
 source "${WS}/install/setup.bash"
+set -u
 
 # 1. Convert GNSS bags -> ROS 2 (once)
 if [[ ! -d "${BAG_OUT}" ]]; then
@@ -76,19 +91,41 @@ echo "[run] Starting gici_ros2_main ..."
 "${NODE_EXE}" "${CFG}" > "${OUT_DIR}/node.log" 2>&1 &
 NODE_PID=$!
 sleep 3
+if ! kill -0 "${NODE_PID}" 2>/dev/null; then
+  wait "${NODE_PID}" 2>/dev/null || true
+  echo "[run] gici_ros2_main exited before playback; see ${OUT_DIR}/node.log" >&2
+  exit 1
+fi
 
 echo "[run] Playing ROS 2 GNSS bag at rate ${RATE} ..."
 # The node subscribes with reliable + keep-all QoS, so no messages are dropped even
 # at high rate; a large read-ahead queue lets the player buffer ahead.
-ros2 bag play "${BAG_OUT}" --rate "${RATE}" --read-ahead-queue-size 5000 || true
+PLAYER_STATUS=0
+ros2 bag play "${BAG_OUT}" --rate "${RATE}" --read-ahead-queue-size 5000 || PLAYER_STATUS=$?
+NODE_DIED=0
+if ! kill -0 "${NODE_PID}" 2>/dev/null; then
+  wait "${NODE_PID}" 2>/dev/null || true
+  NODE_DIED=1
+fi
 
 # Let the estimator drain, then stop the node cleanly (flushes the solution file).
 sleep 5
 kill -INT "${NODE_PID}" 2>/dev/null || true
 # Give the node time to join its estimator/stream threads and flush output.
 for _ in $(seq 1 30); do kill -0 "${NODE_PID}" 2>/dev/null || break; sleep 0.5; done
-kill -9 "${NODE_PID}" 2>/dev/null || true
+if kill -0 "${NODE_PID}" 2>/dev/null; then
+  echo "[run] gici_ros2_main did not stop after SIGINT; forcing shutdown" >&2
+  kill -9 "${NODE_PID}" 2>/dev/null || true
+fi
 
 echo "[run] Done. Solution epochs (GPGGA):"
 grep -c GPGGA "${OUT_DIR}/solution_2.txt" 2>/dev/null || echo 0
 echo "[run] Node log: ${OUT_DIR}/node.log"
+if [[ "${PLAYER_STATUS}" -ne 0 ]]; then
+  echo "[run] ros2 bag play failed with status ${PLAYER_STATUS}" >&2
+  exit "${PLAYER_STATUS}"
+fi
+if [[ "${NODE_DIED}" -ne 0 ]]; then
+  echo "[run] gici_ros2_main exited during playback; see ${OUT_DIR}/node.log" >&2
+  exit 1
+fi

@@ -1,15 +1,27 @@
-# GICI ROS 2 UrbanNav RRR configuration (RTK + IMU + Camera, tightly coupled).
+# GICI ROS 2 UrbanNav RRR — ROS 2-ADAPTED config (RTK + IMU + Camera, tightly coupled).
 #
-# Estimator + calibration are the author's upstream RRR block
+# This is the ROS 2-native variant: it consumes the merged bag built from the
+# UrbanNav gici GNSS ROS 1 bags (HKSC base, 4 per-constellation ephemeris topics,
+# NO DCB) plus the sensors bag, and aligns/outputs at the 1 Hz GNSS rate. It is a
+# practical ROS 2 adaptation, NOT a same-input equivalent of the author's file-mode
+# baseline (different base station and no DCB), so it must not be used for the
+# numerical-equivalence comparison.
+#
+# For the same-input, file-mode-equivalent run (canonical rover/HKKT-base/brdc-eph/
+# DCB via scripts/ros2/urbannav_rinex_to_ros2.py) use
+# ros_urbannav_rrr_upstream_equivalent.yaml instead.
+#
+# Estimator + calibration are the author's RRR block
 # (ros_wrapper/src/gici/option/ros_urbannav.yaml lines 395-518 @ f2b8579), adapted to:
 #   * enable the /imu/data + /zed2/camera/left/image_raw streamers,
 #   * write the trajectory to a file (NMEA) instead of the optional RViz output topics,
 #   * drop the camera `mask:` field (the mask.png referenced upstream is not shipped with
 #     the dataset; the proven file-mode RRR config omits it too).
 #
-# Data path: play the merged ROS 2 bag built by scripts/ros2/urbannav_rrr_to_ros2.py,
-# which puts GNSS (GPST), IMU and camera on ONE GPST timeline (sensor header stamps are
-# shifted by the 18 s GPST-UTC leap so the visual/inertial factors line up with GNSS).
+# Data path: play the merged ROS 2 bag built by scripts/ros2/urbannav_rrr_to_ros2.py.
+# The bag record time is GICI's internal UTC measurement time: GNSS observations use
+# gpst(week,tow)-18 s, while UrbanNav IMU/camera header stamps are already UTC and
+# are not shifted.
 stream:
   streamers:
   - streamer:

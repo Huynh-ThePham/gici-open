@@ -74,8 +74,8 @@ scripts/ros2/run_urbannav_rrr_ros2.sh medium 0.5
 
 | Item | Path |
 | --- | --- |
-| RRR config (source of truth) | `ros2_wrapper/src/gici_ros2/config/ros_urbannav_rrr.yaml` |
-| RRR config (resolved at run time) | `output/ros2_urbannav_rrr/medium/ros_urbannav_rrr.yaml` (generated, ignored) |
+| RRR config (source of truth) | `ros2_wrapper/src/gici_ros2/config/ros_urbannav_rrr_ros2_adapted.yaml` |
+| RRR config (resolved at run time) | `output/ros2_urbannav_rrr/medium/ros_urbannav_rrr_ros2_adapted.yaml` (generated, ignored) |
 | Merged ROS 2 bag | `output/ros2_urbannav_rrr/medium/rrr_ros2/` (generated, ignored) |
 | Trajectory output (NMEA) | `output/ros2_urbannav_rrr/medium/solution.txt` (generated, ignored) |
 | Node log | `output/ros2_urbannav_rrr/medium/node.log` (generated, ignored) |
@@ -155,6 +155,14 @@ Treat the number as an internal, self-consistent baseline, not a published claim
   are already UTC, i.e. already on GICI's internal GNSS timescale.
 - RRR is compute-heavy. If the estimator lags at `rate 1`, lower the rate; QoS
   never drops data, so a slower rate only keeps queues small.
+
+## Relationship to file-mode baseline
+
+File-mode algorithm baseline: `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`
+(tag `filemode-full-rrr-v1`). ROS 2 canonical config
+(`ros_urbannav_rrr_upstream_equivalent.yaml`) mirrors that estimator block.
+This ROS 2 V1 baseline uses the **adapted** path (ROS 1 GNSS bags) unless
+`--canonical` is passed.
 
 ## Baseline files (frozen)
 

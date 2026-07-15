@@ -111,9 +111,15 @@ scripts/ros2/run_urbannav_rrr_ros2.sh medium 1
 ```
 
 This builds ONE merged ROS 2 bag (GNSS + `/imu/data` + `/zed2/camera/left/image_raw`),
-resolves the config, launches the node with `config/ros_urbannav_rrr.yaml`
+resolves the config, launches the node with `config/ros_urbannav_rrr_ros2_adapted.yaml`
 (`type: rtk_imu_camera_rrr`), and plays the bag. The trajectory is written as NMEA to
 `output/ros2_urbannav_rrr/medium/solution.txt`.
+
+For the same-input, file-mode-equivalent run (canonical rover / HKKT base / brdc eph /
+DCB, matching `research/config/rtk_imu_camera_rrr_urbannav.yaml`), first build the
+canonical bag with `scripts/ros2/urbannav_rinex_to_ros2.sh` and then run
+`config/ros_urbannav_rrr_upstream_equivalent.yaml`. See
+`scripts/ros2/run_urbannav_rrr_ros2.sh --canonical`.
 
 Verified: **762 GPGGA epochs** (~13 min, the full drive), 7255 fused RRR updates,
 `Sensor type: 3` (GNSS+IMU+camera) with `Fix status: 3`, 0 crashes, clean SIGINT exit.
@@ -180,26 +186,36 @@ the final teardown abort is expected/harmless.
 
 Previously the ROS path segfaulted right after the first fixed epoch, inside
 `gici::DataCluster::~DataCluster()` (a `shared_ptr` release) from
-`gici::EstimatingBase::run()`. Root cause, found by inspecting the converted bag:
+`gici::EstimatingBase::run()` — a classic heap-corruption signature (the write that
+corrupts the heap happens earlier; the crash surfaces only when the allocator walks
+the corrupted arena during free).
 
-- The core's `obsd_t` holds only `NFREQ+NEXOBS = 3` frequency slots per satellite, but
-  UrbanNav's u-blox F9P observations carry **4 frequencies per satellite**.
-- The observation callback in `ros_stream.cpp` looped `for i in 0..o.code.size()` and
-  wrote `obs->SNR[i] / L[i] / P[i] / ...`. With 4 frequencies it wrote index `[3]` past
-  the 3-slot arrays, **corrupting the heap**, which then crashed when the `DataCluster`
-  was freed. This is a latent bug in the author's original ROS 1 conversion loop too; it
-  only triggers with >3-frequency data (which the authors' own gici-board bags never had,
-  and they never ran UrbanNav through ROS).
+Correcting an earlier misdiagnosis: it is **not** a frequency-slot overflow. Every
+`CMakeLists.txt` here compiles the core with `-DNFREQ=3 -DNEXOBS=3`, and both macros
+are `#ifndef`-guarded in `third_party/rtklib/include/rtklib.h` (lines 131-138), so the
+command-line `-D` wins and `obsd_t` has `NFREQ+NEXOBS = 6` slots per satellite. UrbanNav
+u-blox F9P observations carry at most 4 frequencies, so writing index `[3]` stays well
+within the 6-slot `SNR/LLI/code/L/P/D` arrays — no overflow there.
 
-The fix is in the **wrapper**, not the core (so the `f2b8579` core stays
-byte-identical): clamp the per-satellite frequency index to `NFREQ+NEXOBS` and the
-per-epoch observation count to `MAXOBS`, plus clamp `eph.tgd` to its array size. See
-`ros2_wrapper/src/gici_ros2/src/ros_interface/ros_stream.cpp`
-(`gnssObservationsCallback` / `gnssEphemeridesCallback`).
+The real corruption paths, which the wrapper now clamps defensively in
+`gnssObservationsCallback`, are:
+
+- **Per-epoch observation count** > `MAXOBS` (96): the observations are written into the
+  fixed `obs_t.data[MAXOBS]` array, so a large epoch (many sats x systems) would write
+  past it. Guarded by `if (n >= MAXOBS) break;`.
+- **Unrecognized PRN**: `satid2no()` returns `0` for a satellite the core is not built
+  for; the old loop still stored it, and downstream `sat-1` indexing / `satsys()` on a
+  zero sat id reads/writes out of bounds. Guarded by `if (obs->sat <= 0) continue;`.
+- **Unequal per-frequency vector lengths**: the message stores `snr/lli/code/l/p/d` as
+  separate vectors; iterating to one vector's length while another is shorter is an
+  out-of-bounds `std::vector` read (UB). Guarded by taking
+  `num_freq = min(code, snr, lli, l, p, d, NFREQ+NEXOBS)` before the copy loop.
+
+`gnssEphemeridesCallback` likewise clamps `eph.tgd` to its array size. All fixes live in
+the **wrapper**, not the core, so the `f2b8579` core stays byte-identical.
 
 After the fix the ROS path runs the **full trajectory** with no crash — e.g. a 70 s
-window produced 319 continuous RTK epochs (0 segfaults), matching the file-mode behavior
-(all quality-5/float, which is what this NFREQ=3 core produces on UrbanNav).
+window produced 319 continuous RTK epochs (0 segfaults), matching the file-mode behavior.
 
 ### Note on the separate file-mode teardown abort
 

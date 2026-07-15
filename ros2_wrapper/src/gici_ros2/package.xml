@@ -5,8 +5,8 @@
   <version>1.0.0</version>
   <description>ROS 2 (rclcpp/ament) wrapper of the GICI library, ported from
     chichengcn/gici-open ROS1 wrapper, for the gici_research_standard UrbanNav setup.</description>
-  <maintainer email="research@example.com">GICI research</maintainer>
-  <license>BSD</license>
+  <maintainer email="gici-research@users.noreply.github.com">GICI research</maintainer>
+  <license>GPL-3.0-only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -20,7 +20,11 @@
   <depend>tf2_ros</depend>
   <depend>cv_bridge</depend>
   <depend>gici_ros2_msgs</depend>
+  <depend>eigen</depend>
   <depend>libopencv-dev</depend>
+  <depend>yaml-cpp</depend>
+  <depend>libgoogle-glog-dev</depend>
+  <depend>libceres-dev</depend>
 
   <exec_depend>ros2launch</exec_depend>
 

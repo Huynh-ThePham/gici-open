@@ -1,0 +1,124 @@
+# GICI ROS 2 UrbanNav — RINEX -> ROS republish config (bag generation ONLY).
+#
+# Purpose: emit the EXACT same GNSS data the file-mode RRR baseline consumes
+# (research/config/rtk_imu_camera_rrr_urbannav.yaml) onto the ROS topics the
+# ROS 2 estimator subscribes to, so a recorded bag carries byte/numerically
+# identical GNSS to file-mode. This reuses the core's own RINEX / DCB formators
+# (type: file + gnss-rinex / dcb-file), not a re-implemented parser.
+#
+# Flow per stream:  type:file (reads RINEX/BSX) -> formator (gnss-rinex/dcb-file)
+#                   -> ROS output streamer (format: gnss_raw) -> /gici/* topics.
+#
+# There is NO estimator here. Run this config with gici_ros2_main while
+# `ros2 bag record` captures the /gici/* topics, then reclock + merge sensors
+# with scripts/ros2/finalize_rinex_bag.py.
+#
+# Placeholders (<...>) are substituted by scripts/ros2/urbannav_rinex_to_ros2.sh:
+#   <ROVER_OBS> <REF_OBS> <EPH_NAV> <DCB_FILE> <OUTPUT_DIR>
+#
+# Topic layout (must match the estimator config subscriptions):
+#   /gici/gnss_rover/observations
+#   /gici/gnss_reference/observations, /gici/gnss_reference/antenna_position
+#   /gici/gnss_ephemeris/ephemerides, /gici/gnss_ephemeris/ionosphere_parameter
+#   /gici/gnss_dcb/code_bias
+stream:
+  streamers:
+  # --- File readers (decode RINEX/BSX via core formators) ---
+  - streamer:
+      tag: str_rover_file
+      output_tags: [fmt_rover]
+      type: file
+      path: <ROVER_OBS>
+      enable_time_tag: false
+  - streamer:
+      tag: str_ref_file
+      output_tags: [fmt_ref]
+      type: file
+      path: <REF_OBS>
+      enable_time_tag: false
+  - streamer:
+      tag: str_eph_file
+      output_tags: [fmt_eph]
+      type: file
+      path: <EPH_NAV>
+      enable_time_tag: false
+  - streamer:
+      tag: str_dcb_file
+      output_tags: [fmt_dcb]
+      type: file
+      path: <DCB_FILE>
+      enable_time_tag: false
+
+  # --- ROS republishers (one formator each; publish decoded GNSS) ---
+  # Outputs use keep_all + transient_local + reliable QoS: the file readers
+  # publish as fast as they read, and transient_local retains the FULL history so
+  # `ros2 bag record` captures everything even though it joins after the node
+  # (no volatile race, no drops).
+  - streamer:
+      tag: str_ros_out_rover
+      input_tags: [fmt_rover]
+      type: ros
+      topic_name: /gici/gnss_rover
+      io: output
+      format: gnss_raw
+      qos: { reliability: reliable, history: keep_all, durability: transient_local }
+      enable_observation: true
+  - streamer:
+      tag: str_ros_out_ref
+      input_tags: [fmt_ref]
+      type: ros
+      topic_name: /gici/gnss_reference
+      io: output
+      format: gnss_raw
+      qos: { reliability: reliable, history: keep_all, durability: transient_local }
+      enable_observation: true
+      enable_antenna_position: true
+  - streamer:
+      tag: str_ros_out_eph
+      input_tags: [fmt_eph]
+      type: ros
+      topic_name: /gici/gnss_ephemeris
+      io: output
+      format: gnss_raw
+      qos: { reliability: reliable, history: keep_all, durability: transient_local }
+      enable_ephemeris: true
+      enable_ionosphere_parameter: true
+  - streamer:
+      tag: str_ros_out_dcb
+      input_tags: [fmt_dcb]
+      type: ros
+      topic_name: /gici/gnss_dcb
+      io: output
+      format: gnss_raw
+      qos: { reliability: reliable, history: keep_all, durability: transient_local }
+      enable_ssr_code_bias: true
+
+  formators:
+  - formator:
+      io: input
+      tag: fmt_rover
+      type: gnss-rinex
+  - formator:
+      io: input
+      tag: fmt_ref
+      type: gnss-rinex
+  - formator:
+      io: input
+      tag: fmt_eph
+      type: gnss-rinex
+  - formator:
+      io: input
+      tag: fmt_dcb
+      type: dcb-file
+
+  replay:
+    enable: false
+
+# Republish only: no estimator.
+estimate: []
+
+logging:
+  enable: true
+  min_log_level: 0
+  log_to_stderr: true
+  file_directory: <OUTPUT_DIR>/log

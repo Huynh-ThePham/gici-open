@@ -6,6 +6,7 @@
 **/
 #include "gici/ros_interface/ros_stream.h"
 
+#include <algorithm>
 #include <functional>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
@@ -19,6 +20,48 @@ using std::placeholders::_1;
 
 // Static variables for stream binding
 std::vector<RosStream *> RosStream::static_this_;
+
+namespace {
+bool optionEnabled(const YAML::Node& node, const std::string& key)
+{
+  bool enable = false;
+  return option_tools::safeGet(node, key, &enable) && enable;
+}
+
+// Build a ROS 2 QoS profile from an optional `qos:` block on the streamer node.
+// Defaults preserve the previous hard-coded behavior:
+//   input : reliable + keep_all + volatile (replayed bags must never drop data),
+//   output: reliable + keep_last(queue_size) + volatile.
+// A streamer may override any field, e.g. to accept a best_effort live sensor
+// publisher, bound memory with keep_last, or retain history for late-joining
+// recorders with transient_local. Example:
+//   qos: { reliability: best_effort, history: keep_last, depth: 2000 }
+rclcpp::QoS buildStreamQos(
+  const YAML::Node& node, StreamIOType io_type, int queue_size)
+{
+  std::string reliability = "reliable";
+  std::string history = (io_type == StreamIOType::Input) ? "keep_all" : "keep_last";
+  std::string durability = "volatile";
+  int depth = queue_size > 0 ? queue_size : 10;
+
+  YAML::Node qos_node = node["qos"];
+  if (qos_node.IsDefined() && qos_node.IsMap()) {
+    option_tools::safeGet(qos_node, "reliability", &reliability);
+    option_tools::safeGet(qos_node, "history", &history);
+    option_tools::safeGet(qos_node, "durability", &durability);
+    option_tools::safeGet(qos_node, "depth", &depth);
+  }
+
+  rclcpp::QoS qos = (history == "keep_all")
+    ? rclcpp::QoS(rclcpp::KeepAll())
+    : rclcpp::QoS(rclcpp::KeepLast(static_cast<size_t>(std::max(depth, 1))));
+  if (reliability == "best_effort") qos.best_effort();
+  else qos.reliable();
+  if (durability == "transient_local") qos.transient_local();
+  else qos.durability_volatile();
+  return qos;
+}
+}  // namespace
 
 RosStream::RosStream(
   rclcpp::Node::SharedPtr node, const NodeOptionHandlePtr& nodes, int istreamer) :
@@ -59,14 +102,13 @@ RosStream::RosStream(
   if (io_type_ != StreamIOType::Input && io_type_ != StreamIOType::Output) {
     LOG(ERROR) << "Invalid IO type for ROS streamer!";
   }
-  // Replaying a dataset must not drop GNSS/sensor messages regardless of playback
-  // rate (GICI keys off the message week/tow, not the wall clock), so subscribe with
-  // reliable + keep-all history. A small KeepLast queue would silently drop bursts of
-  // ephemeris/observations at high rate and stall the estimator ("waiting for
-  // ephemeris"). Outputs keep a bounded reliable queue.
-  const rclcpp::QoS qos = (io_type_ == StreamIOType::Input)
-    ? rclcpp::QoS(rclcpp::KeepAll()).reliable()
-    : rclcpp::QoS(rclcpp::KeepLast(static_cast<size_t>(queue_size_))).reliable();
+  // QoS: configurable via an optional `qos:` block, with defaults that preserve
+  // the original behavior (input = reliable + keep_all so replayed bags never
+  // drop GNSS/sensor bursts; output = reliable + keep_last(queue_size)). See
+  // buildStreamQos(). Live sensors can request best_effort; the RINEX republish
+  // outputs request transient_local so a late-joining recorder gets full history.
+  const rclcpp::QoS qos =
+    buildStreamQos(streamer_node->this_node, io_type_, queue_size_);
   // initialize ros topic
   std::string data_format;
   if (!option_tools::safeGet(streamer_node->this_node, "format", &data_format)) {
@@ -96,51 +138,43 @@ RosStream::RosStream(
   else if (data_format == "gnss_raw") {
     data_format_ = RosDataFormat::GnssRaw;
     if (io_type_ == StreamIOType::Input) {
-      bool enable = false;
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_observation", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_observation")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssObservations>(
           topic_name_ + "/observations", qos,
           std::bind(&RosStream::gnssObservationsCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::Observations);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ephemeris", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ephemeris")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssEphemerides>(
           topic_name_ + "/ephemerides", qos,
           std::bind(&RosStream::gnssEphemeridesCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::Ephemerides);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_antenna_position", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_antenna_position")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssAntennaPosition>(
           topic_name_ + "/antenna_position", qos,
           std::bind(&RosStream::gnssAntennaPositionCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::AntennaPosition);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ionosphere_parameter", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ionosphere_parameter")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssIonosphereParameter>(
           topic_name_ + "/ionosphere_parameter", qos,
           std::bind(&RosStream::gnssIonosphereParameterCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::IonosphereParameter);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_code_bias", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_code_bias")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssSsrCodeBiases>(
           topic_name_ + "/code_bias", qos,
           std::bind(&RosStream::gnssSsrCodeBiasesCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::CodeBias);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_phase_bias", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_phase_bias")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssSsrPhaseBiases>(
           topic_name_ + "/phase_bias", qos,
           std::bind(&RosStream::gnssSsrPhaseBiasesCallback, this, _1)));
         gnss_formats_.push_back(RosGnssDataFormat::PhaseBias);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_ephemeris", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_ephemeris")) {
         subscribers_.push_back(node_->create_subscription<gici_ros2_msgs::msg::GnssSsrEphemerides>(
           topic_name_ + "/ephemerides_correction", qos,
           std::bind(&RosStream::gnssSsrEphemeridesCallback, this, _1)));
@@ -148,45 +182,37 @@ RosStream::RosStream(
       }
     }
     else {
-      bool enable = false;
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_observation", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_observation")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssObservations>(
           topic_name_ + "/observations", qos));
         gnss_formats_.push_back(RosGnssDataFormat::Observations);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ephemeris", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ephemeris")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssEphemerides>(
           topic_name_ + "/ephemerides", qos));
         gnss_formats_.push_back(RosGnssDataFormat::Ephemerides);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_antenna_position", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_antenna_position")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssAntennaPosition>(
           topic_name_ + "/antenna_position", qos));
         gnss_formats_.push_back(RosGnssDataFormat::AntennaPosition);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ionosphere_parameter", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ionosphere_parameter")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssIonosphereParameter>(
           topic_name_ + "/ionosphere_parameter", qos));
         gnss_formats_.push_back(RosGnssDataFormat::IonosphereParameter);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_code_bias", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_code_bias")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssSsrCodeBiases>(
           topic_name_ + "/code_bias", qos));
         gnss_formats_.push_back(RosGnssDataFormat::CodeBias);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_phase_bias", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_phase_bias")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssSsrPhaseBiases>(
           topic_name_ + "/phase_bias", qos));
         gnss_formats_.push_back(RosGnssDataFormat::PhaseBias);
       }
-      if (option_tools::safeGet(streamer_node->this_node,
-          "enable_ssr_ephemeris", &enable)) {
+      if (optionEnabled(streamer_node->this_node, "enable_ssr_ephemeris")) {
         publishers_.push_back(node_->create_publisher<gici_ros2_msgs::msg::GnssSsrEphemerides>(
           topic_name_ + "/ephemerides_correction", qos));
         gnss_formats_.push_back(RosGnssDataFormat::EphemeridesCorrection);
@@ -541,20 +567,30 @@ void RosStream::gnssObservationsCallback(
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
   data_cluster->gnss->observation->n = 0;
-  // obsd_t only has NFREQ+NEXOBS frequency slots. Some datasets (e.g. UrbanNav)
-  // publish more frequencies per satellite than the core is compiled for; writing
-  // past the slot count corrupts the heap and later crashes in DataCluster::free().
-  // Clamp to the number of slots the core actually supports.
+  // Defensive clamps against heap corruption (which otherwise surfaces as a crash
+  // in DataCluster::free()). obsd_t has NFREQ+NEXOBS (=6 here) frequency slots, so
+  // UrbanNav's <=4 frequencies fit; the real risks are (a) > MAXOBS observations
+  // overflowing obs->data, (b) an unrecognized PRN (satid2no()==0) causing sat-1
+  // indexing out of bounds, and (c) mismatched per-frequency vector lengths in the
+  // message causing out-of-bounds reads. Clamp all three below.
   const size_t max_freq = NFREQ + NEXOBS;
   for (const auto& o : msg->observations) {
+    if (o.prn.empty()) continue;
     int n = data_cluster->gnss->observation->n;
     if (n >= MAXOBS) break;
     obsd_t *obs = data_cluster->gnss->observation->data + n;
     memset(obs, 0, sizeof(obsd_t));
     obs->time = gpst2time(o.week, o.tow);
     obs->sat = satid2no(o.prn.data());
+    if (obs->sat <= 0) continue;
     obs->rcv = 0;
-    for (size_t i = 0; i < o.code.size() && i < max_freq; i++) {
+    size_t num_freq = std::min(o.code.size(), max_freq);
+    num_freq = std::min(num_freq, o.snr.size());
+    num_freq = std::min(num_freq, o.lli.size());
+    num_freq = std::min(num_freq, o.l.size());
+    num_freq = std::min(num_freq, o.p.size());
+    num_freq = std::min(num_freq, o.d.size());
+    for (size_t i = 0; i < num_freq; i++) {
       obs->SNR[i] = o.snr[i];
       obs->LLI[i] = o.lli[i];
       obs->code[i] = gnss_common::rinexTypeToCodeType(o.prn[0], o.code[i]);
@@ -562,8 +598,10 @@ void RosStream::gnssObservationsCallback(
       obs->P[i] = o.p[i];
       obs->D[i] = o.d[i];
     }
+    if (num_freq == 0) continue;
     data_cluster->gnss->observation->n++;
   }
+  if (data_cluster->gnss->observation->n == 0) return;
   sortobs(data_cluster->gnss->observation);
   data_cluster->gnss->types.push_back(GnssDataType::Observation);
 
@@ -590,8 +628,10 @@ void RosStream::gnssEphemeridesCallback(
   }
   nav_t *nav = &raw_->nav;
   for (const auto& e : msg->ephemerides) {
+    if (e.prn.empty()) continue;
     eph_t eph = {0};
     eph.sat = satid2no(e.prn.data());
+    if (eph.sat <= 0 || eph.sat > MAXSAT) continue;
     eph.week = e.week;
     if (e.prn[0] == 'C') {
       eph.toe = bdt2gpst(bdt2time(e.week, e.toes));
@@ -631,8 +671,11 @@ void RosStream::gnssEphemeridesCallback(
     gnss_common::updateEphemeris(nav, eph.sat, data_cluster->gnss);
   }
   for (const auto& e : msg->glonass_ephemerides) {
+    if (e.prn.size() < 3) continue;
+    if (e.vel.size() < 3 || e.pos.size() < 3 || e.acc.size() < 3) continue;
     geph_t geph= {0};
     geph.sat = satid2no(e.prn.data());
+    if (geph.sat <= 0) continue;
     geph.svh = e.svh;
     geph.iode = e.iode;
     geph.tof = gpst2time(e.week, e.tof);
@@ -647,7 +690,9 @@ void RosStream::gnssEphemeridesCallback(
     geph.taun = e.taun;
     geph.dtaun = e.dtaun;
     geph.age = e.age;
-    nav->geph[atoi(e.prn.substr(1, 2).data()) - 1] = geph;
+    int glo_index = atoi(e.prn.substr(1, 2).data()) - 1;
+    if (glo_index < 0 || glo_index >= MAXPRNGLO) continue;
+    nav->geph[glo_index] = geph;
     gnss_common::updateEphemeris(nav, geph.sat, data_cluster->gnss);
   }
   data_cluster->gnss->types.push_back(GnssDataType::Ephemeris);
@@ -668,9 +713,10 @@ void RosStream::gnssAntennaPositionCallback(
   // Convert antenna data
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
-  for (size_t i = 0; i < 3; i++) {
+  for (size_t i = 0; i < 3 && i < msg->pos.size(); i++) {
     data_cluster->gnss->antenna->pos[i] = msg->pos[i];
   }
+  if (msg->pos.size() < 3) return;
   data_cluster->gnss->types.push_back(GnssDataType::AntePos);
 
   // Call GNSS processor
@@ -690,20 +736,24 @@ void RosStream::gnssIonosphereParameterCallback(
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
   if (msg->type == 0) {
+    if (msg->parameters.size() < 8) return;
     for (int i = 0; i < 8; i++) {
       data_cluster->gnss->ephemeris->ion_gps[i] = msg->parameters[i];
     }
   }
   else if (msg->type == 1) {
+    if (msg->parameters.size() < 8) return;
     for (int i = 0; i < 8; i++) {
       data_cluster->gnss->ephemeris->ion_cmp[i] = msg->parameters[i];
     }
   }
   else if (msg->type == 2) {
+    if (msg->parameters.size() < 4) return;
     for (int i = 0; i < 4; i++) {
       data_cluster->gnss->ephemeris->ion_gal[i] = msg->parameters[i];
     }
   }
+  else return;
   data_cluster->gnss->types.push_back(GnssDataType::IonAndUtcPara);
 
   // Call GNSS processor
@@ -723,13 +773,17 @@ void RosStream::gnssSsrCodeBiasesCallback(
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
   for (const auto& b : msg->biases) {
+    if (b.prn.empty()) continue;
     int sat = satid2no(b.prn.data());
+    if (sat <= 0 || sat > MAXSAT) continue;
     ssr_t *ssr = data_cluster->gnss->ephemeris->ssr + sat - 1;
     ssr->t0[4] = gpst2time(b.week, b.tow);
     ssr->udi[4] = b.udi;
     ssr->isdcb = b.isdcb;
-    for (size_t i = 0; i < b.code.size(); i++) {
+    size_t num_bias = std::min(b.code.size(), b.bias.size());
+    for (size_t i = 0; i < num_bias; i++) {
       int code = gnss_common::rinexTypeToCodeType(b.prn[0], b.code[i]);
+      if (code <= 0 || code > MAXCODE) continue;
       ssr->cbias[code - 1] = b.bias[i];
     }
     ssr->update = 1;
@@ -753,18 +807,21 @@ void RosStream::gnssSsrPhaseBiasesCallback(
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
   for (const auto& b : msg->biases) {
+    if (b.prn.empty()) continue;
     int sat = satid2no(b.prn.data());
+    if (sat <= 0 || sat > MAXSAT) continue;
     ssr_t *ssr = data_cluster->gnss->ephemeris->ssr + sat - 1;
     ssr->t0[4] = gpst2time(b.week, b.tow);
     ssr->udi[4] = b.udi;
     ssr->isdpb = b.isdpb;
-    for (size_t i = 0; i < b.phase.size(); i++) {
+    size_t num_bias = std::min(b.phase.size(), b.bias.size());
+    for (size_t i = 0; i < num_bias; i++) {
       int phase = gnss_common::phaseStringToPhaseType(b.prn[0], b.phase[i]);
-      int code = 0;
-      for (; code < MAXCODE; code++) {
+      int code = 1;
+      for (; code <= MAXCODE; code++) {
         if (gnss_common::getPhaseID(b.prn[0], code) == phase) break;
       }
-      CHECK(code < MAXCODE);
+      if (code > MAXCODE) continue;
       ssr->pbias[code - 1] = b.bias[i];
     }
     ssr->update = 1;
@@ -788,7 +845,9 @@ void RosStream::gnssSsrEphemeridesCallback(
   std::shared_ptr<DataCluster> data_cluster =
     std::make_shared<DataCluster>(FormatorType::GnssRaw);
   for (const auto& c : msg->corrections) {
+    if (c.prn.empty()) continue;
     int sat = satid2no(c.prn.data());
+    if (sat <= 0 || sat > MAXSAT) continue;
     ssr_t *ssr = data_cluster->gnss->ephemeris->ssr + sat - 1;
     for (int i = 0; i < 2; i++) {
       ssr->t0[i] = gpst2time(c.week, c.tow);
@@ -798,7 +857,10 @@ void RosStream::gnssSsrEphemeridesCallback(
     ssr->iode = c.iode;
     ssr->iodcrc = c.iodcrc;
     ssr->refd = c.refd;
-    for (int i = 0; i < 3; i++) {
+    size_t num_corr = std::min(c.deph.size(), c.ddeph.size());
+    num_corr = std::min(num_corr, c.dclk.size());
+    num_corr = std::min<size_t>(num_corr, 3);
+    for (size_t i = 0; i < num_corr; i++) {
       ssr->deph[i] = c.deph[i];
       ssr->ddeph[i] = c.ddeph[i];
       ssr->dclk[i] = c.dclk[i];

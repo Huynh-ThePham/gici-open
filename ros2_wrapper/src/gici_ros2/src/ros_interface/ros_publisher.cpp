@@ -35,6 +35,11 @@ void doPublish(const rclcpp::PublisherBase::SharedPtr& pub_base, const MsgT& msg
   CHECK(pub != nullptr) << "Publisher type mismatch when publishing!";
   pub->publish(msg);
 }
+
+rclcpp::Time nowTime()
+{
+  return rclcpp::Clock(RCL_SYSTEM_TIME).now();
+}
 }  // namespace
 
 // Configures
@@ -414,6 +419,7 @@ void publishGnssObservations(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssObservations msg;
+  msg.header.stamp = nowTime();
   for (int i = 0; i < gnss.observation->n; i++) {
     gici_ros2_msgs::msg::GnssObservation o;
     obsd_t *obs = gnss.observation->data + i;
@@ -443,10 +449,15 @@ void publishGnssEphemerides(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssEphemerides msg;
+  msg.header.stamp = nowTime();
   nav_t *nav = gnss.ephemeris;
-  for (int i = 0; i < MAXSAT; i++) {
+  if (nav == nullptr) return;
+  // nav->eph / nav->geph are DYNAMIC arrays (grown by add_eph/add_geph and sized
+  // by nav->n / nav->ng), NOT MAXSAT-indexed. Iterating to MAXSAT/MAXPRNGLO reads
+  // past the allocation and crashes (e.g. when republishing RINEX-decoded eph).
+  for (int i = 0; nav->eph != nullptr && i < nav->n; i++) {
     eph_t *eph = nav->eph + i;
-    if (eph->sat == 0) continue;
+    if (eph->sat <= 0) continue;
     gici_ros2_msgs::msg::GnssEphemeris e;
     char prn_buf[5];
     satno2id(eph->sat, prn_buf);
@@ -491,9 +502,9 @@ void publishGnssEphemerides(
     e.svh = eph->svh;
     msg.ephemerides.push_back(e);
   }
-  for (int i = 0; i < MAXPRNGLO; i++) {
+  for (int i = 0; nav->geph != nullptr && i < nav->ng; i++) {
     geph_t *geph = nav->geph + i;
-    if (geph->sat == 0) continue;
+    if (geph->sat <= 0) continue;
     gici_ros2_msgs::msg::GlonassEphemeris e;
     char prn_buf[5];
     satno2id(geph->sat, prn_buf);
@@ -523,6 +534,7 @@ void publishGnssAntennaPosition(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssAntennaPosition msg;
+  msg.header.stamp = nowTime();
   for (size_t i = 0; i < 3; i++) {
     msg.pos.push_back(gnss.antenna->pos[i]);
   }
@@ -533,6 +545,7 @@ void publishGnssIonosphereParameter(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssIonosphereParameter msg;
+  msg.header.stamp = nowTime();
   // use GPS parameters
   msg.type = 0;
   for (int i = 0; i < 8; i++) {
@@ -545,6 +558,7 @@ void publishGnssSsrCodeBiases(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssSsrCodeBiases msg;
+  msg.header.stamp = nowTime();
   for (int i = 0; i < MAXSAT; i++) {
     gici_ros2_msgs::msg::GnssSsrCodeBias b;
     ssr_t *ssr = gnss.ephemeris->ssr + i;
@@ -574,6 +588,7 @@ void publishGnssSsrPhaseBiases(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssSsrPhaseBiases msg;
+  msg.header.stamp = nowTime();
   for (int i = 0; i < MAXSAT; i++) {
     gici_ros2_msgs::msg::GnssSsrPhaseBias b;
     ssr_t *ssr = gnss.ephemeris->ssr + i;
@@ -604,6 +619,7 @@ void publishGnssSsrEphemerides(
   const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::GNSS& gnss)
 {
   gici_ros2_msgs::msg::GnssSsrEphemerides msg;
+  msg.header.stamp = nowTime();
   for (int i = 0; i < MAXSAT; i++) {
     gici_ros2_msgs::msg::GnssSsrEphemeris c;
     ssr_t *ssr = gnss.ephemeris->ssr + i;

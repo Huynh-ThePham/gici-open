@@ -1,0 +1,219 @@
+# GICI ROS 2 UrbanNav RRR — UPSTREAM-EQUIVALENT config (RTK + IMU + camera).
+#
+# This config mirrors the locked FILE-MODE RRR baseline V1
+# (research/config/rtk_imu_camera_rrr_urbannav.yaml, tag filemode-full-rrr-v1;
+#  docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md), itself derived from
+# option/post_estimation_RTK_RRR_rinex_imutext.yaml + the ros_urbannav.yaml RRR
+# block @ f2b8579) as closely as ROS 2 allows. The estimator block is copied
+# verbatim; the ONLY differences are the I/O layer:
+#   * post-file streamers -> ROS topic streamers (fed by the CANONICAL bag built
+#     from the SAME rover/HKKT-base/brdc-eph/DCB inputs via
+#     scripts/ros2/urbannav_rinex_to_ros2.py),
+#   * DCB arrives as a ROS SSR code_bias message (enable_ssr_code_bias) instead
+#     of a post-file dcb-file streamer, but lands in the same ssr->cbias/isdcb,
+#   * trajectory written to a file (NMEA) instead of RViz output topics.
+#
+# Because the GNSS/IMU/camera inputs are the same data the file-mode baseline
+# consumes, this config is the one to use for the numerical-equivalence
+# comparison against results/baseline/urbannav/medium/.
+#
+# For a ROS 2-native variant (4-topic ephemeris, HKSC base, no DCB, 1 Hz output)
+# see ros_urbannav_rrr_ros2_adapted.yaml.
+#
+# Placeholder OUTPUT_DIR is substituted by the run script.
+stream:
+  streamers:
+  - streamer:
+      tag: str_ros_gnss_rov
+      type: ros
+      topic_name: /gici/gnss_rover
+      io: input
+      format: gnss_raw
+      enable_observation: true
+  - streamer:
+      tag: str_ros_gnss_ref
+      type: ros
+      topic_name: /gici/gnss_reference
+      io: input
+      format: gnss_raw
+      enable_observation: true
+      enable_antenna_position: true
+  - streamer:
+      tag: str_ros_gnss_eph
+      type: ros
+      topic_name: /gici/gnss_ephemeris
+      io: input
+      format: gnss_raw
+      enable_ephemeris: true
+      enable_ionosphere_parameter: true
+      queue_size: 10
+  - streamer:
+      tag: str_ros_gnss_dcb
+      type: ros
+      topic_name: /gici/gnss_dcb
+      io: input
+      format: gnss_raw
+      enable_ssr_code_bias: true
+      queue_size: 10
+  - streamer:
+      tag: str_ros_imu
+      type: ros
+      topic_name: /imu/data
+      queue_size: 200
+      io: input
+      format: imu
+  - streamer:
+      tag: str_ros_camera
+      type: ros
+      topic_name: /zed2/camera/left/image_raw
+      queue_size: 20
+      io: input
+      format: image
+  - streamer:
+      tag: str_solution_file
+      input_tags: [fmt_solution_file]
+      type: file
+      path: OUTPUT_DIR/solution.txt
+      enable_time_tag: false
+
+  formators:
+  - formator:
+      io: output
+      tag: fmt_solution_file
+      type: nmea
+      use_esa: true
+      use_esd: true
+      talker_id: GP
+
+  replay:
+    enable: false
+
+estimate:
+- estimator:
+    tag: est_gnss_imu_camera_rrr
+    type: rtk_imu_camera_rrr
+    input_tags: [str_ros_camera, str_ros_gnss_rov, str_ros_gnss_ref, str_ros_gnss_eph, str_ros_gnss_dcb, str_ros_imu]
+    str_ros_camera_roles: [mono]
+    str_ros_gnss_rov_roles: [rover]
+    str_ros_gnss_ref_roles: [reference]
+    str_ros_gnss_eph_roles: [ephemeris, ion_utc]
+    str_ros_gnss_dcb_roles: [code_bias]
+    str_ros_imu_roles: [major]
+    output_tags: [fmt_solution_file]
+    # File-mode aligns output to IMU and downsamples 40x (mirrored here).
+    output_align_tag: str_ros_imu
+    output_downsample_rate: 40
+    compute_covariance: false
+    enable_input_align: true
+    input_align_latency: 0.2
+    enable_backend_data_sparsify: true
+    pending_num_threshold: 5
+    rtk_imu_camera_rrr_options:
+      max_keyframes: 20
+      min_yaw_std_init_visual: 0.5
+    rtk_options:
+      max_window_length: 3
+      use_ambiguity_resolution: true
+      estimate_velocity: true
+    gnss_estimator_base_options:
+      min_num_satellite_redundancy: 2
+      use_outlier_rejection: true
+      reject_one_outlier_once: false
+      max_pesudorange_error: 30.0
+      max_phaserange_error: 0.1
+      max_doppler_error: 5.0
+      gnss_error_parameter:
+        code_to_phase_ratio: 1000.0
+        doppler_error_factor: 0.2
+      gnss_common:
+        min_elevation: 7.0
+        min_SNR: [30.0, 25.0]
+        mw_slip_thres: 0.5
+        gf_slip_thres: 0.05
+        gf_sd_slip_thres: 0.05
+    visual_estimator_base_options:
+      feature_error_std: 5.0
+      stable_feature_error_std: 1.0
+      landmark_outlier_rejection_threshold: 20.0
+      camera_extrinsics_initial_std: [0.1, 0.1, 0.1, 5.0, 5.0, 5.0]
+    imu_estimator_base_options:
+      imu_parameters:
+        sigma_bg: 0.001
+        sigma_ba: 0.01
+        sigma_g_c: 0.010270904839480961
+        sigma_a_c: 0.011197412605492375
+        sigma_gw_c: 9.13553839948819e-05
+        sigma_aw_c: 0.00011751767903346351
+      body_to_imu_rotation: [0.0, 0.0, 0.0]
+      body_to_imu_rotation_std: 5.0
+      car_motion: true
+      car_motion_min_velocity: 3.0
+      car_motion_max_anguler_velocity: 5.0
+      zupt_max_acc_std: 0.45
+      zupt_max_gyro_std: 0.05
+      zupt_max_gyro_median: 0.01
+      zupt_sigma_zero_velocity: 0.01
+    estimator_base_options:
+      max_iteration: 5
+      num_threads: 4
+      max_solver_time: 0.05
+      verbose_output: false
+      solver_type: dense_schur
+      trust_region_strategy_type: dogleg
+    ambiguity_resolution_options:
+      system_exclude: [R]
+      min_percentage_fixation_uwl: 1.0
+      min_percentage_fixation_wl: 0.9
+      min_percentage_fixation_nl: 0.9
+      ratio: 2.0
+    gnss_imu_initializer_options:
+      max_iteration: 30
+      num_threads: 4
+      max_solver_time: 0.05
+      gnss_extrinsics: [0.0, -0.43, -0.16]
+      gnss_extrinsics_initial_std: [0.0, 0.0, 0.0]
+      time_window_length_slow_motion: 0.1
+      time_window_length_dynamic_motion: 3.0
+      min_acceleration: 0.5
+    feature_handler_options:
+      max_features_per_frame: 100
+      max_n_kfs: 100000
+      min_disparity_init_landmark: 10.0
+      kfselect_min_numkfs: 30
+      kfselect_min_disparity: 10.0
+      kfselect_min_dist_metric: 0.5
+      kfselect_min_angle: 5.0
+      kfselect_min_dt: 0.5
+      detector:
+        cell_size: 40
+      camera_parameters:
+        label: urbannav-zed2-left
+        cameras:
+        - camera:
+            label: cam0
+            image_width: 672
+            image_height: 376
+            type: pinhole
+            intrinsics:
+              cols: 1
+              rows: 4
+              data: [264.9425, 264.79, 334.3975, 183.162]
+            distortion:
+              type: radial-tangential
+              parameters:
+                cols: 1
+                rows: 4
+                data: [-0.0442856, 0.0133574, 0.0, 0.0]
+          T_B_C:
+            cols: 4
+            rows: 4
+            data: [0.9988523440263594, 0.0013591158885982, 0.0478763786960621, -0.0849942494565455,
+                  -0.0478641883492691, -0.0079091258538426, 0.9988225393942077, 0.126,
+                  0.001736175887714, -0.9999677987476544, -0.0078349959194297, 0.076,
+                  0.0, 0.0, 0.0, 1.0]
+
+logging:
+  enable: true
+  min_log_level: 0
+  log_to_stderr: true
+  file_directory: OUTPUT_DIR/log

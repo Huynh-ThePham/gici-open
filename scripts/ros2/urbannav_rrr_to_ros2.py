@@ -122,8 +122,8 @@ def convert(ts2, r2type, src):
     return cls(**kwargs)
 
 
-def bgr8_to_mono8(ts2, src, leap: float):
-    """Convert a ROS1 sensor_msgs/Image (bgr8) to a ROS2 mono8 Image, stamp shifted."""
+def bgr8_to_mono8(ts2, src, stamp_offset: float):
+    """Convert a ROS1 sensor_msgs/Image (bgr8) to a ROS2 mono8 Image."""
     h, w = int(src.height), int(src.width)
     buf = np.frombuffer(bytes(src.data), dtype=np.uint8).reshape(h, src.step)
     bgr = buf[:, : w * 3].reshape(h, w, 3).astype(np.float32)
@@ -134,7 +134,7 @@ def bgr8_to_mono8(ts2, src, leap: float):
     Image = ts2.types["sensor_msgs/msg/Image"]
     Header = ts2.types["std_msgs/msg/Header"]
     Time = ts2.types["builtin_interfaces/msg/Time"]
-    total = src.header.stamp.sec + src.header.stamp.nanosec * 1e-9 + leap
+    total = src.header.stamp.sec + src.header.stamp.nanosec * 1e-9 + stamp_offset
     sec = int(total)
     nsec = int(round((total - sec) * 1e9))
     if nsec >= 1_000_000_000:
@@ -204,14 +204,10 @@ def main() -> int:
     ts2 = build_ros2_typestore()
     ts1 = build_ros1_typestore()
 
-    # CRITICAL: set every message's bag RECORD time equal to its GICI-internal time
-    # (GPST). GNSS reads time from week/tow (gpst), sensors from header.stamp+leap. If we
-    # kept the original record times instead, GNSS (internal = record+17) and sensors
-    # (internal = record+18 after the leap shift) would drift ~1 s apart, so during
-    # playback the high-rate IMU would always sit >0.4 s ahead of the arriving GNSS and
-    # the estimator's input-align buffer would throw every GNSS epoch away (no RTK, no
-    # solution). Reclocking record==internal makes all three sensors share one paced
-    # GPST clock, so ros2 bag play delivers them correctly interleaved.
+    # CRITICAL: set every message's bag RECORD time equal to its GICI-internal UTC
+    # measurement time. GNSS reads time from week/tow and the core converts it with
+    # gpst2utc; UrbanNav sensors are read from header.stamp, already UTC. Reclocking
+    # record==internal lets ros2 bag play deliver the streams correctly interleaved.
     t0 = min(
         first_internal_time(gdir / "gnss_rover.bag", ts1, "obs", args.leap),
         first_internal_time(sensors, ts1, "sensor", args.leap, {IMU_TOPIC}),
@@ -219,7 +215,7 @@ def main() -> int:
     )
     cutoff = t0 + args.window
     burst_base_ns = int((t0 - 2.0) * 1e9)  # ephemeris burst just before first obs
-    print(f"drive start t0(gpst)={t0:.3f}  cutoff={cutoff:.3f}  leap={args.leap}s")
+    print(f"drive start t0(utc)={t0:.3f}  cutoff={cutoff:.3f}  leap={args.leap}s")
 
     n_eph = n_obs = n_imu = n_cam = n_drop = 0
     with Writer(out_dir, version=8) as writer:  # rosbag2 storage version 8 (Humble)
