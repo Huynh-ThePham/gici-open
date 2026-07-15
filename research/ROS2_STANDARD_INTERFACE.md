@@ -36,3 +36,31 @@ source /opt/ros/humble/setup.bash
 colcon build --packages-select gici_ros2_msgs gici_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
+
+## Quick start (this branch)
+
+```bash
+# LIVE — GICI chạy trong ROS2 (topic-driven, MultiSensorEstimating)
+./scripts/ros2/launch_gici_live.sh board 1.1          # node chờ sensor
+./scripts/ros2/launch_gici_live.sh board 1.1 bag 1.0  # test với bag replay
+
+# POSTFILE — batch baseline (không phải live)
+./scripts/ros2/launch_gici_board_std.sh postfile 1.1
+./scripts/ros2/launch_gici_board_std.sh bag 1.1 1.0   # alias live + bag infra
+```
+
+Topic layout: `ros2_wrapper/docs/ROS2_STANDARD_TOPICS.md`  
+Live architecture: `ros2_wrapper/docs/ROS2_LIVE_NODE.md`
+
+## Status (board RRR)
+
+| Item | Status |
+|------|--------|
+| `/gici/odom`, `/gici/path`, `/gici/pose` in postfile + bag YAML | done |
+| `gici_ros2_main`: `config_file` param + SIGINT/SIGTERM → `rclcpp::shutdown()` | done |
+| `ros2 launch gici_ros2 gici_board.launch.py` | done |
+| `scripts/ros2/render_gici_config.py` + `launch_gici_board_std.sh` | done |
+| `ros2_wrapper/docs/ROS2_STANDARD_TOPICS.md` | done |
+| colcon build + smoke (topics + GPGGA) | verified |
+| UrbanNav std launch / topics | done (`ros_urbannav_live_rrr.yaml`, `launch_gici_live.sh urbannav`) |
+| Live node doc | `ros2_wrapper/docs/ROS2_LIVE_NODE.md` |

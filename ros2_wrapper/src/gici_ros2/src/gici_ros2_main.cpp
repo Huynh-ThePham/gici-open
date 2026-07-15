@@ -6,6 +6,7 @@
 *
 * Usage: ros2 run gici_ros2 gici_ros2_main <path-to-config>
 **/
+#include <csignal>
 #include <rclcpp/rclcpp.hpp>
 
 #include "gici/ros_interface/ros_node_handle.h"
@@ -15,6 +16,17 @@
 
 using namespace gici;
 
+namespace {
+std::shared_ptr<rclcpp::Node> g_node;
+
+void handleShutdownSignal(int)
+{
+  if (g_node) {
+    rclcpp::shutdown();
+  }
+}
+}  // namespace
+
 int main(int argc, char** argv)
 {
   // Initialize ROS 2
@@ -22,13 +34,35 @@ int main(int argc, char** argv)
 
   // Get config file. ROS 2 injects its own args; keep the first non-ROS argument.
   std::vector<std::string> args = rclcpp::remove_ros_arguments(argc, argv);
-  if (args.size() != 2) {
-    std::cerr << "Invalid input variables! Supported variables are: "
-              << "<path-to-executable> <path-to-config>" << std::endl;
+
+  // Create the ROS 2 node (OpenVINS-style: config via CLI arg or ROS param)
+  rclcpp::NodeOptions node_options;
+  node_options.automatically_declare_parameters_from_overrides(true);
+  rclcpp::Node::SharedPtr node = std::make_shared<rclcpp::Node>("gici", node_options);
+  g_node = node;
+  if (!node->has_parameter("config_file")) {
+    node->declare_parameter<std::string>("config_file", "");
+  }
+  if (!node->has_parameter("use_sim_time")) {
+    node->declare_parameter<bool>("use_sim_time", false);
+  }
+
+  std::string config_file_path;
+  if (args.size() == 2) {
+    config_file_path = args[1];
+  } else {
+    config_file_path = node->get_parameter("config_file").as_string();
+  }
+  if (config_file_path.empty()) {
+    std::cerr << "Invalid input! Provide config as:\n"
+              << "  gici_ros2_main <path-to-config>\n"
+              << "  or ROS param config_file via launch / --params-file" << std::endl;
     rclcpp::shutdown();
     return -1;
   }
-  std::string config_file_path = args[1];
+
+  std::signal(SIGINT, handleShutdownSignal);
+  std::signal(SIGTERM, handleShutdownSignal);
   YAML::Node yaml_node;
   try {
      yaml_node = YAML::LoadFile(config_file_path);
@@ -69,7 +103,7 @@ int main(int argc, char** argv)
   }
 
   // Create the ROS 2 node
-  rclcpp::Node::SharedPtr node = std::make_shared<rclcpp::Node>("gici");
+  // (node already created above for config_file param)
 
   // Initialize nodes
   std::unique_ptr<RosNodeHandle> node_handle =

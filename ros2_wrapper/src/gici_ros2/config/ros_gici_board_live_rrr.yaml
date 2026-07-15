@@ -1,56 +1,67 @@
-# GICI ROS 2 — GICI board post-file RTK/IMU/Camera RRR + standard ROS outputs.
+# GICI ROS 2 — LIVE mode (board RTK/IMU/Camera RRR).
 #
-# Direct port of option/post_estimation_RTK_RRR.yaml @ f2b8579: same post-file
-# streamers + replay, running inside gici_ros2_main (no rosbag conversion).
+# The fusion core runs as MultiSensorEstimating: sensor data arrives on ROS topics,
+# rclcpp::spin drives callbacks, estimator threads consume measurements in real time.
+# This is how GICI "lives in ROS2" — not post-file batch replay.
+#
+# Inputs:  /gici/gnss_rover, /gici/gnss_reference, /gici/imu_raw, /gici/image_raw
+# Outputs: /gici/odom, /gici/path, /gici/pose (+ NMEA file)
+# Ephemeris + DCB: loaded once from file at startup (hybrid; not on ROS topics).
 #
 # Placeholders: DATASET_DIR, GICI_ROOT, OUTPUT_DIR, LOG_DIR, RTCM_START
 stream:
   streamers:
   - streamer:
-      tag: str_gnss_rov_file
-      type: post-file
-      path: DATASET_DIR/gnss_rover.bin
-      format:
-        type: gnss-raw
-        sub_type: tersus
-      latency: 0.0
+      tag: str_ros_gnss_rov
+      type: ros
+      topic_name: /gici/gnss_rover
+      io: input
+      format: gnss_raw
+      enable_observation: true
+      queue_size: 50
   - streamer:
-      tag: str_gnss_ref_file
-      type: post-file
-      path: DATASET_DIR/gnss_reference.bin
-      format:
-        type: gnss-rtcm-3
-        start_time: RTCM_START
+      tag: str_ros_gnss_ref
+      type: ros
+      topic_name: /gici/gnss_reference
+      io: input
+      format: gnss_raw
+      enable_observation: true
+      enable_antenna_position: true
+      queue_size: 50
   - streamer:
       tag: str_gnss_eph_file
-      type: post-file
+      output_tags: [fmt_gnss_eph]
+      type: file
       path: DATASET_DIR/gnss_ephemeris.bin
-      burst_load: true
-      format:
-        type: gnss-rtcm-3
-        start_time: RTCM_START
+      enable_time_tag: false
   - streamer:
       tag: str_dcb_file
-      type: post-file
+      output_tags: [fmt_dcb_file]
+      type: file
       path: GICI_ROOT/option/CAS0MGXRAP_20221580000_01D_01D_DCB.BSX
-      burst_load: true
-      format:
-        type: dcb-file
+      enable_time_tag: false
   - streamer:
-      tag: str_imu_file
-      type: post-file
-      path: DATASET_DIR/imu.bin
-      format:
-        type: imu-pack
+      tag: str_ros_imu
+      type: ros
+      topic_name: /gici/imu_raw
+      io: input
+      format: imu
+      queue_size: 500
+      qos:
+        reliability: best_effort
+        history: keep_last
+        depth: 500
   - streamer:
-      tag: str_camera_file
-      type: post-file
-      path: DATASET_DIR/camera.bin
-      buffer_length: 361472
-      format:
-        type: image-pack
-        width: 752
-        height: 480
+      tag: str_ros_camera
+      type: ros
+      topic_name: /gici/image_raw
+      io: input
+      format: image
+      queue_size: 30
+      qos:
+        reliability: best_effort
+        history: keep_last
+        depth: 30
   - streamer:
       tag: str_rrr_solution_file
       input_tags: [fmt_rrr_solution_file]
@@ -82,6 +93,15 @@ stream:
 
   formators:
   - formator:
+      io: input
+      tag: fmt_gnss_eph
+      type: gnss-rtcm-3
+      start_time: RTCM_START
+  - formator:
+      io: input
+      tag: fmt_dcb_file
+      type: dcb-file
+  - formator:
       io: output
       tag: fmt_rrr_solution_file
       type: nmea
@@ -90,26 +110,27 @@ stream:
       talker_id: GP
 
   replay:
-    enable: true
-    start_offset: 0.0
+    enable: false
 
 estimate:
 - estimator:
-    tag: est_gnss_imu_camera_rrr
+    tag: est_rtk_imu_camera_rrr
     type: rtk_imu_camera_rrr
-    input_tags: [str_gnss_rov_file, str_gnss_ref_file, str_gnss_eph_file, str_dcb_file, str_imu_file, str_camera_file]
-    str_gnss_rov_file_roles: [rover]
-    str_gnss_ref_file_roles: [reference]
-    str_gnss_eph_file_roles: [ephemeris]
-    str_dcb_file_roles: [code_bias]
-    str_imu_file_roles: [major]
-    str_camera_file_roles: [mono]
+    input_tags: [str_ros_gnss_rov, str_ros_gnss_ref, fmt_gnss_eph, fmt_dcb_file, str_ros_camera, str_ros_imu]
+    str_ros_gnss_rov_roles: [rover]
+    str_ros_gnss_ref_roles: [reference]
+    fmt_gnss_eph_roles: [ephemeris]
+    fmt_dcb_file_roles: [code_bias]
+    str_ros_camera_roles: [mono]
+    str_ros_imu_roles: [major]
     output_tags: [fmt_rrr_solution_file, str_solution_odometry, str_solution_path, str_solution_pose]
-    output_align_tag: str_imu_file
+    output_align_tag: str_ros_imu
     output_downsample_rate: 40
     compute_covariance: false
     enable_input_align: true
-    input_align_latency: 1.0
+    input_align_latency: 0.2
+    enable_backend_data_sparsify: true
+    pending_num_threshold: 5
     rtk_imu_camera_rrr_options:
       max_keyframes: 3
       min_yaw_std_init_visual: 0.5

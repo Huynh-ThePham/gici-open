@@ -1,4 +1,4 @@
-# GICI ROS 2 — GICI board bag replay (hybrid).
+# GICI ROS 2 — GICI board bag replay (hybrid) + standard ROS outputs (/gici/odom, /gici/path).
 #
 # Real-time ROS topics: rover GNSS, reference GNSS, IMU, camera (merged ROS2 bag).
 # File streamers: ephemeris + DCB (gici_files_to_rosbag segfaults on eph *.bin).
@@ -55,6 +55,28 @@ stream:
       type: file
       path: OUTPUT_DIR/solution.txt
       enable_time_tag: false
+  - streamer:
+      tag: str_solution_odometry
+      type: ros
+      topic_name: /gici/odom
+      queue_size: 10
+      io: output
+      format: odometry
+      subframe_id: base_link
+  - streamer:
+      tag: str_solution_path
+      type: ros
+      topic_name: /gici/path
+      queue_size: 100
+      io: output
+      format: path
+  - streamer:
+      tag: str_solution_pose
+      type: ros
+      topic_name: /gici/pose
+      queue_size: 5
+      io: output
+      format: pose_stamped
 
   formators:
   - formator:
@@ -88,7 +110,7 @@ estimate:
     fmt_dcb_file_roles: [code_bias]
     str_ros_camera_roles: [mono]
     str_ros_imu_roles: [major]
-    output_tags: [fmt_rrr_solution_file]
+    output_tags: [fmt_rrr_solution_file, str_solution_odometry, str_solution_path, str_solution_pose]
     output_align_tag: str_ros_imu
     output_downsample_rate: 40
     compute_covariance: false

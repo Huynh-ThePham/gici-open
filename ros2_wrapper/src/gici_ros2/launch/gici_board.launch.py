@@ -1,10 +1,13 @@
-"""Launch the GICI ROS 2 node for UrbanNav (live topic-driven fusion).
+"""Standard ROS 2 launch for GICI board RTK/IMU/Camera RRR.
 
 Usage:
-  ros2 launch gici_ros2 urbannav.launch.py config:=/abs/path/to/ros_urbannav_live_rrr.yaml
+  ros2 launch gici_ros2 gici_board.launch.py \\
+    config:=/path/to/rendered.yaml
 
-Prefer ros_urbannav_live_rrr.yaml (standard /gici/odom outputs). See
-scripts/ros2/launch_urbannav_std.sh and scripts/ros2/launch_gici_live.sh.
+For live topic-driven fusion use gici_live.launch.py instead (postfile configs
+use batch replay and are not live).
+
+See scripts/ros2/launch_gici_board_std.sh for full postfile/bag workflows.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -18,7 +21,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'config',
-            description='Absolute path to the resolved UrbanNav GICI config',
+            description='Absolute path to resolved GICI YAML config',
         ),
         DeclareLaunchArgument(
             'use_sim_time',

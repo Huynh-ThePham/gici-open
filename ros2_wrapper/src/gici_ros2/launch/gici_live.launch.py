@@ -1,10 +1,17 @@
-"""Launch the GICI ROS 2 node for UrbanNav (live topic-driven fusion).
+"""Launch GICI as a live ROS 2 fusion node (topic-driven, not post-file batch).
+
+The estimator runs on MultiSensorEstimating when replay.enable is false and all
+sensor streamers are type: ros. rclcpp::spin processes subscription callbacks;
+fusion threads consume measurements in real time.
 
 Usage:
-  ros2 launch gici_ros2 urbannav.launch.py config:=/abs/path/to/ros_urbannav_live_rrr.yaml
+  # Board live (connect sensors or play bag in another terminal):
+  ros2 launch gici_ros2 gici_live.launch.py config:=/path/to/rendered_live.yaml
 
-Prefer ros_urbannav_live_rrr.yaml (standard /gici/odom outputs). See
-scripts/ros2/launch_urbannav_std.sh and scripts/ros2/launch_gici_live.sh.
+  # Sim time (bag replay with --clock):
+  ros2 launch gici_ros2 gici_live.launch.py config:=/path/to/yaml use_sim_time:=true
+
+See scripts/ros2/launch_gici_live.sh and ros2_wrapper/docs/ROS2_LIVE_NODE.md
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -18,12 +25,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'config',
-            description='Absolute path to the resolved UrbanNav GICI config',
+            description='Absolute path to resolved GICI live YAML (replay.enable: false)',
         ),
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',
-            description='Use /clock when replaying bags with --clock',
+            description='Use /clock (set true when playing rosbag with --clock)',
         ),
         Node(
             package='gici_ros2',
