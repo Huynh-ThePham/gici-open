@@ -1,0 +1,26 @@
+# Ephemeris only — test isolated conversion.
+stream:
+  streamers:
+  - streamer:
+      tag: str_gnss_eph
+      output_tags: [fmt_gnss_eph]
+      type: file
+      path: <data-directory>/gnss_ephemeris.bin
+
+  formators:
+  - formator:
+      io: input
+      tag: fmt_gnss_eph
+      type: gnss-rtcm-3
+      start_time: 2023.03.20
+
+rosbags:
+- rosbag:
+    tag: rosbag_gnss_eph
+    type: rosbag
+    input_tags: [fmt_gnss_eph]
+    path: <data-directory>/gnss_ephemeris.bag
+    topic_name: /gici/gnss_ephemeris
+    format: gnss_raw
+    enable_ephemeris: true
+    enable_ionosphere_parameter: true

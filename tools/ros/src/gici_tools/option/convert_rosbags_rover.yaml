@@ -1,0 +1,25 @@
+# GNSS rover only — avoids ephemeris segfault in gici_files_to_rosbag.
+stream:
+  streamers:
+  - streamer:
+      tag: str_gnss_rov
+      output_tags: [fmt_gnss_rov]
+      type: file
+      path: <data-directory>/gnss_rover.bin
+
+  formators:
+  - formator:
+      io: input
+      tag: fmt_gnss_rov
+      type: gnss-raw
+      sub_type: tersus
+
+rosbags:
+- rosbag:
+    tag: rosbag_gnss_rov
+    type: rosbag
+    input_tags: [fmt_gnss_rov]
+    path: <data-directory>/gnss_rover.bag
+    topic_name: /gici/gnss_rover
+    format: gnss_raw
+    enable_observation: true

@@ -30,8 +30,21 @@ find_package(yaml-cpp REQUIRED)
 get_filename_component(GICI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 add_subdirectory(${GICI_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/gici_core)
 
+# Pin Eigen alignment to 16 bytes on EVERY target so the core (built with -msse)
+# and this executable (which may inherit CXXFLAGS=-march=native -> AVX/32-byte) share
+# one Eigen ABI. Without this, Eigen members inside DataCluster/kindr transforms are
+# laid out differently across the DSO boundary and the node segfaults (kindr NCamera
+# on startup, DataCluster destructor at runtime).
+foreach(_t gici vikit_common svo fast)
+  if(TARGET ${_t})
+    target_compile_definitions(${_t} PUBLIC
+      EIGEN_MAX_ALIGN_BYTES=16 EIGEN_MAX_STATIC_ALIGN_BYTES=16)
+  endif()
+endforeach()
+
 # RTKLIB memory-layout definitions MUST match the core to keep struct sizes identical
 add_definitions(-DENAGLO -DENACMP -DENAGAL -DENAQZS -DENAIRN -DNFREQ=3 -DNEXOBS=3 -DDLL)
+add_definitions(-DEIGEN_MAX_ALIGN_BYTES=16 -DEIGEN_MAX_STATIC_ALIGN_BYTES=16)
 
 add_executable(gici_ros2_main
   src/gici_ros2_main.cpp

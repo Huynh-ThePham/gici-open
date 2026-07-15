@@ -74,8 +74,25 @@ Locked reproduction (evo_ape, Sim(3), full trajectory):
 | 4.1 dense-urban | 0.073 m / 0.696° | 0.070 m / 0.733° | 0.08 m / 0.54° |
 
 Results: `results/baseline/gici_board/<id>/` (file-mode),
-`results/baseline/gici_board_ros2/<id>/` (ROS2); metrics in
+`results/baseline/gici_board_ros2/<id>/` (ROS2 postfile); metrics in
 `evaluation/ape_metrics.json`.
+
+## Real-time ROS2 bag replay (GICI board)
+
+Hybrid pipeline (avoids `gici_files_to_rosbag` segfault on ephemeris):
+
+1. `*.bin` → ROS1 bags: rover, reference, IMU, camera (Docker Noetic if needed)
+2. Merged ROS2 bag (`gici_board_to_ros2.py`) — rover/ref/IMU/camera topics only
+3. `gici_ros2_main` + `ros_gici_board_bag_hybrid_rrr.yaml` (eph + DCB from `*.bin` via file streamers)
+4. `ros2 bag play` at real-time rate
+
+```bash
+./scripts/run_gici_board_bag_replay.sh 1.1          # build bags + replay + eval
+./scripts/run_gici_board_bag_replay.sh 1.1 3.1 4.1
+```
+
+Results: `results/baseline/gici_board_ros2_bag/<id>/evaluation/ape_metrics.json`.
+Compare vs postfile baseline in the summary table printed at the end.
 
 ## Typical workflow — UrbanNav RRR (later)
 

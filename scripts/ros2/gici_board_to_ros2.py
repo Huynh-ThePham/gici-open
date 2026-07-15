@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Merge GICI board ROS 1 bags (from gici_files_to_rosbag) into one ROS 2 bag.
+"""Merge GICI board ROS 1 bags (from gici_tools) into one ROS 2 bag.
 
 Input bags (under dataset dir):
-  gnss_rover.bag, gnss_reference.bag, gnss_ephemeris.bag, imu.bag, image.bag
+  gnss_rover.bag, gnss_reference.bag, imu.bag, image.bag
 
-Topics preserved for ros_gici_board_rrr.yaml:
+Ephemeris is not converted to a bag (author tool segfaults on gnss_ephemeris.bin);
+ros_gici_board_bag_hybrid_rrr.yaml loads eph from the *.bin at node start.
+
+Topics for ros_gici_board_bag_hybrid_rrr.yaml:
   /gici/gnss_rover/observations
   /gici/gnss_reference/observations, /gici/gnss_reference/antenna_position
-  /gici/gnss_ephemeris/ephemerides, /gici/gnss_ephemeris/ionosphere_parameter
-  /gici/imu_raw
-  /gici/image_raw
+  /gici/imu_raw, /gici/image_raw
 
-Ephemeris / ionosphere / antenna are bursted at bag start (like file-mode burst_load).
-Observation / IMU / image record times follow GICI-internal UTC (gpst-leap for obs).
+Reference antenna_position is bursted at bag start; obs/IMU/image times follow UTC.
 """
 from __future__ import annotations
 
@@ -109,6 +109,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset-dir", required=True, help="GICI board dataset dir with *.bag")
     ap.add_argument("--out", required=True, help="Output ROS 2 bag directory")
+    ap.add_argument("--force", action="store_true", help="Remove existing --out directory")
     ap.add_argument("--leap", type=float, default=18.0,
                     help="GPST-UTC leap seconds (default 18 for 2023 GICI board)")
     args = ap.parse_args()
@@ -116,11 +117,15 @@ def main() -> int:
     ds = Path(args.dataset_dir)
     out_dir = Path(args.out)
     if out_dir.exists():
-        print(f"ERROR: {out_dir} exists; remove first.", file=sys.stderr)
-        return 1
+        if args.force:
+            import shutil
+            shutil.rmtree(out_dir)
+        else:
+            print(f"ERROR: {out_dir} exists; use --force or remove first.", file=sys.stderr)
+            return 1
 
     bags = {
-        "gnss": [ds / n for n in ("gnss_rover.bag", "gnss_reference.bag", "gnss_ephemeris.bag")],
+        "gnss": [ds / n for n in ("gnss_rover.bag", "gnss_reference.bag")],
         "imu": ds / "imu.bag",
         "cam": ds / "image.bag",
     }
