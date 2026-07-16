@@ -212,6 +212,45 @@ suggests, but worth re-checking once the design is more concrete).
    TITS 2024 factor-graph-AR line of work, to confirm none of them already do the
    current-epoch local-information approach.
 
+## First end-to-end result (2026-07-17) — real accuracy improvement, no regression
+
+Implemented the fusion (`RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance`,
+`include/gici/fusion/rtk_imu_camera_rrr_estimator.h`/`.cpp`): the ambiguity covariance
+fed to `AmbiguityResolution::solveRtk()` is now the shadow-estimator's covariance fused
+(information-form addition, Schur complement via `Graph::getLocalCrossInformation()`)
+with the current epoch's local cross-information against the tightly-coupled pose/
+speed-and-bias state, instead of the plain GNSS-only shadow covariance. Opt-in via
+`RtkImuCameraRrrEstimatorOptions::use_vision_aided_ambiguity_resolution` (default
+false); falls back to the plain shadow covariance if fusion fails (e.g. singular fused
+information matrix).
+
+**UrbanNav Medium** (100% float today, the primary test case — evaluated with the full
+author `evo_ape` Sim(3) pipeline, 2 independent full-trajectory runs):
+
+| | Vision-aided AR | Locked baseline (no vision-aided AR) | Paper |
+|---|---|---|---|
+| Run 1 | 2.564 m / 1.408° | | |
+| Run 2 | 3.275 m / 1.465° | | |
+| Mean | **2.92 m / 1.44°** | 8.042 m / 2.108° | 3.40 m / 1.30° |
+
+Both runs individually pass vs paper (≤3.75m/≤1.65°) — a roughly **2.75x** translation
+and **1.5x** rotation improvement over the locked (non-vision-aided) baseline, and the
+mean now *beats* the paper's own number. (Note: a first Medium re-run attempt was
+accidentally killed by an overly-broad `pkill -f gici_main` while testing GICI-board
+1.1 concurrently in the same worktree — a testing-process mistake, not a finding;
+discarded and re-run in isolation, giving the "Run 2" result above.)
+
+**GICI-board 1.1** (open-sky, already near-optimal — the regression-check case): 0.0291m
+/ 0.485° vs the locked reference 0.0292m / 0.471° — essentially unchanged, still passes
+both the locked-reference and paper comparisons. Confirms the mechanism doesn't hurt an
+already-good-fixing scenario; there just isn't much room to improve it further.
+
+**Not yet checked:** GICI-board 3.1/4.1, UrbanNav Deep, and repeated runs to
+characterize the ~0.7m run-to-run spread seen on Medium (consistent with the
+Ceres `num_threads` non-associativity noted elsewhere in this repo's baseline work,
+not a new source of variance) — needed before this can be called a validated result
+for a paper, not just a promising first pass.
+
 ## Out of scope
 
 - Changing any currently-locked baseline's default numbers (this is opt-in).
@@ -228,7 +267,8 @@ suggests, but worth re-checking once the design is more concrete).
 | Codebase deep-dive of current AR implementation | done (2026-07-17) — gap confirmed, root cause (shadow-estimator workaround) found, entry point identified at `rtk_imu_camera_rrr_estimator.cpp:387` |
 | Cost measurement of naive `ceres::Covariance` joint query | done (2026-07-17) — **infeasible**: 86.4% of epochs > 50ms, mean 687ms once the sliding window fills (vs shadow estimator's constant ~0.4ms) |
 | Jacobian-based local information approach (`Graph::getLocalCrossInformation`) | done (2026-07-17) — **tractable**: mean 0.21ms, 0/640 epochs > 1ms, cost independent of graph size (~3000x faster than the naive approach) |
-| Fuse local information with a prior (shadow-estimator covariance) | not started — **current step**; needed because ~45% of epochs are near-singular using local-only information |
-| Technical design (how fused cross-info improves AR: decorrelation vs. ratio-test vs. validation) | blocked on above |
-| Implementation (wired into the real AR decision, not just diagnostics) | not started |
-| Evaluation on locked baselines | not started |
+| Fuse local information with a prior (shadow-estimator covariance) | done (2026-07-17) — information-form addition + Schur complement, `estimateVisionAidedAmbiguityCovariance()` |
+| Implementation (wired into the real AR decision) | done (2026-07-17) — opt-in via `use_vision_aided_ambiguity_resolution`, falls back to plain shadow covariance on failure |
+| First end-to-end evaluation | done (2026-07-17) — **UrbanNav Medium: 8.04m/2.11° -> 2.92m/1.44° mean of 2 runs, now passes/beats paper. GICI-board 1.1: no regression (0.0291m/0.485° vs locked 0.0292m/0.471°).** |
+| Full evaluation (GICI-board 3.1/4.1, UrbanNav Deep, repeat-run variance characterization) | not started — **current step**, needed before this is a validated (not just promising) result |
+| Technical design refinement (decorrelation vs. ratio-test vs. validation — currently just replaces the covariance fed into the existing ratio-test/LAMBDA path unchanged) | not started |

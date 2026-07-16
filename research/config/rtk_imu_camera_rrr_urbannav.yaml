@@ -96,6 +96,7 @@ estimate:
       max_keyframes: 20
       min_yaw_std_init_visual: 0.5
       # benchmark_joint_ambiguity_covariance: true  # set for cost-measurement runs only
+      # use_vision_aided_ambiguity_resolution: true  # set to enable vision-aided AR
     rtk_options:
       use_ambiguity_resolution: true
       # UrbanNav file-mode: HKKT base epochs are 30 s (default max_age=20 s drops pairs).

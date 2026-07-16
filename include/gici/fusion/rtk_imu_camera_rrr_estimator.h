@@ -40,6 +40,16 @@ struct RtkImuCameraRrrEstimatorOptions {
   // the AR decision or any estimator output. Default off so existing locked
   // baselines are unaffected.
   bool benchmark_joint_ambiguity_covariance = false;
+
+  // Vision-aided ambiguity resolution (research/vision-aided-ambiguity-resolution):
+  // when true, the ambiguity covariance actually used for AR is the GNSS-only
+  // shadow-estimator covariance *fused* (information-form addition + Schur
+  // complement) with the current epoch's local cross-information between
+  // ambiguities and the tightly-coupled pose/speed-and-bias state -- see
+  // research/VISION_AIDED_AR.md. Falls back to the plain shadow covariance if
+  // fusion fails (e.g. a singular fused information matrix). Default off so
+  // existing locked baselines are unaffected.
+  bool use_vision_aided_ambiguity_resolution = false;
 };
 
 // Estimator
@@ -104,7 +114,16 @@ protected:
   // (ambiguity blocks + current epoch's pose/IMU block only, not the full window)
   // and logs it against the existing shadow-estimator path's timing.
   void benchmarkJointAmbiguityCovariance(const State& state);
-  
+
+  // Vision-aided ambiguity resolution (see use_vision_aided_ambiguity_resolution
+  // option above): fuses the shadow-estimator's ambiguity covariance with the
+  // current epoch's local cross-information against the tightly-coupled pose/
+  // speed-and-bias state. Returns false (leaving `covariance` untouched) if either
+  // the shadow covariance or the fused information matrix is unusable, so the
+  // caller can fall back to the plain shadow covariance.
+  bool estimateVisionAidedAmbiguityCovariance(
+    const State& state, Eigen::MatrixXd& covariance);
+
   // Get latest state
   inline State& latestState() override { return states_[latest_state_index_]; }
 

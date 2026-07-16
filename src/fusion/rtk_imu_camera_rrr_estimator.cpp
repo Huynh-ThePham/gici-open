@@ -385,14 +385,25 @@ bool RtkImuCameraRrrEstimator::estimate()
       states_[i].status = GnssSolutionStatus::Float;
     }
     if (rtk_options_.use_ambiguity_resolution) {
-      // get covariance of ambiguities
+      // get covariance of ambiguities -- vision-aided (fused with the tightly-
+      // coupled pose/speed-and-bias state, research/vision-aided-ambiguity-
+      // resolution) if enabled, falling back to the plain GNSS-only shadow-estimator
+      // covariance if fusion is disabled or fails.
       Eigen::MatrixXd ambiguity_covariance;
-      if (estimateAmbiguityCovariance(
-        states_[latest_state_index_], ambiguity_covariance))
+      bool have_covariance = false;
+      if (rrr_options_.use_vision_aided_ambiguity_resolution) {
+        have_covariance = estimateVisionAidedAmbiguityCovariance(
+          states_[latest_state_index_], ambiguity_covariance);
+      }
+      if (!have_covariance) {
+        have_covariance = estimateAmbiguityCovariance(
+          states_[latest_state_index_], ambiguity_covariance);
+      }
+      if (have_covariance)
       {
         // solve
         AmbiguityResolution::Result ret = ambiguity_resolution_->solveRtk(
-          states_[latest_state_index_].id, curAmbiguityState().ids, 
+          states_[latest_state_index_].id, curAmbiguityState().ids,
           ambiguity_covariance, gnss_measurement_pairs_.back());
         if (ret == AmbiguityResolution::Result::NlFix) {
           for (size_t i = latest_state_index_; i < states_.size(); i++) {
@@ -868,6 +879,72 @@ void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& st
     << " graph_num_parameter_blocks=" << graph_->parameters().size()
     << " graph_num_residual_blocks=" << graph_->residuals().size()
     << " shadow_ok=" << shadow_ok << " shadow_ms=" << shadow_ms;
+}
+
+// Vision-aided ambiguity resolution: see RtkImuCameraRrrEstimatorOptions::
+// use_vision_aided_ambiguity_resolution and research/VISION_AIDED_AR.md.
+bool RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance(
+  const State& state, Eigen::MatrixXd& covariance)
+{
+  // Start from the existing shadow-estimator covariance (GNSS-only, no cross-sensor
+  // information) -- this is what the plain AR path uses today.
+  Eigen::MatrixXd shadow_covariance;
+  if (!estimateAmbiguityCovariance(state, shadow_covariance)) return false;
+  const int num_ambiguities = static_cast<int>(shadow_covariance.rows());
+  if (num_ambiguities == 0) return false;
+
+  // Build the local-cross-information parameter set: ambiguities + current pose +
+  // speed-and-bias (if resolvable). Order must match shadow_covariance's ambiguity
+  // ordering, i.e. curAmbiguityState().ids (both this function and
+  // estimateAmbiguityCovariance() iterate it the same way).
+  std::vector<uint64_t> parameter_block_ids;
+  for (auto id : curAmbiguityState().ids) {
+    if (!graph_->parameterBlockExists(id.asInteger())) return false;
+    parameter_block_ids.push_back(id.asInteger());
+  }
+  if (static_cast<int>(parameter_block_ids.size()) != num_ambiguities) return false;
+  if (!graph_->parameterBlockExists(state.id_in_graph.asInteger())) return false;
+  parameter_block_ids.push_back(state.id_in_graph.asInteger());
+  BackendId speed_and_bias_id = changeIdType(state.id_in_graph, IdType::ImuStates);
+  if (graph_->parameterBlockExists(speed_and_bias_id.asInteger())) {
+    parameter_block_ids.push_back(speed_and_bias_id.asInteger());
+  }
+
+  Eigen::MatrixXd local_information;
+  if (!graph_->getLocalCrossInformation(parameter_block_ids, local_information)) {
+    return false;
+  }
+
+  // The shadow covariance must itself be well-conditioned enough to invert into an
+  // information matrix.
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> shadow_es(
+    shadow_covariance, Eigen::EigenvaluesOnly);
+  if (shadow_es.eigenvalues().minCoeff() < 1e-12) return false;
+  Eigen::MatrixXd shadow_information = shadow_covariance.inverse();
+
+  // Fuse: add the shadow-estimator's (ambiguity-only) information into the
+  // top-left [ambiguity x ambiguity] block of the local cross-information matrix.
+  // The pose/speed-and-bias directions, and their cross terms with ambiguities, are
+  // left exactly as computed by getLocalCrossInformation() -- the shadow estimator
+  // has no information about them at all (it is a GNSS-only shadow graph).
+  Eigen::MatrixXd fused_information = local_information;
+  fused_information.topLeftCorner(num_ambiguities, num_ambiguities) += shadow_information;
+
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> fused_es(fused_information);
+  if (fused_es.info() != Eigen::Success || fused_es.eigenvalues().minCoeff() < 1e-9) {
+    return false;
+  }
+  Eigen::MatrixXd fused_covariance = fused_es.eigenvectors()
+    * fused_es.eigenvalues().cwiseInverse().asDiagonal()
+    * fused_es.eigenvectors().transpose();
+
+  // The ambiguity marginal covariance after properly accounting for its correlation
+  // with the tightly-coupled pose/speed-and-bias state (a Schur-complement effect --
+  // the actual mechanism through which visual/IMU information reshapes the
+  // ambiguity uncertainty used for AR, rather than treating position as if known
+  // exactly the way the plain shadow-estimator covariance implicitly does).
+  covariance = fused_covariance.topLeftCorner(num_ambiguities, num_ambiguities);
+  return true;
 }
 
 };
