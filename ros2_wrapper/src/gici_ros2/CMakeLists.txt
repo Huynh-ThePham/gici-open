@@ -27,7 +27,29 @@ find_package(yaml-cpp REQUIRED)
 # Build the GICI core library (target: gici). This mirrors the ROS1 wrapper,
 # which did add_subdirectory(../../.. gici.out). Core sources stay byte-identical
 # to upstream f2b8579; only this out-of-tree wrapper is added.
-get_filename_component(GICI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+#
+# GICI_ROOT defaults to the standard gici_research_standard monorepo layout
+# (ros2_wrapper/src/gici_ros2/../../..), but can be overridden -- pass
+# -DGICI_ROOT=/path/to/core, or set the GICI_CORE_ROOT environment variable --
+# for a colcon workspace that vendors/symlinks this package independently of
+# that layout. Validated below so a mismatch fails with an actionable message
+# instead of an obscure "file not found" deep inside add_subdirectory().
+if(NOT DEFINED GICI_ROOT)
+  if(DEFINED ENV{GICI_CORE_ROOT})
+    set(GICI_ROOT "$ENV{GICI_CORE_ROOT}")
+  else()
+    get_filename_component(GICI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+  endif()
+endif()
+if(NOT EXISTS "${GICI_ROOT}/CMakeLists.txt" OR NOT EXISTS "${GICI_ROOT}/include/gici")
+  message(FATAL_ERROR
+    "GICI_ROOT (${GICI_ROOT}) does not look like the gici core source tree "
+    "(expected CMakeLists.txt and include/gici/ there). This package expects "
+    "to be built from within the gici_research_standard monorepo "
+    "(ros2_wrapper/src/gici_ros2/); if this package has been relocated, pass "
+    "-DGICI_ROOT=/path/to/core or set the GICI_CORE_ROOT environment "
+    "variable before configuring.")
+endif()
 add_subdirectory(${GICI_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/gici_core)
 
 # Pin Eigen alignment to 16 bytes on EVERY target so the core (built with -msse)
