@@ -73,7 +73,16 @@ DATASETS: dict[str, Dataset] = {
         gt_file="UrbanNav_TST_GT_raw.txt",
         gps_week_day_offset=86400.0,
         rover="gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs",
-        base="gnss/base/hkkt137g.rnx",
+        # Session-aligned 1 s base (02:00-02:59, covers the rover's 02:33-02:46
+        # window; same RINEX 3.02 format/obs-types as the retired full-day file).
+        # The previously-used full-day 30 s hkkt137g.rnx was too sparse for RTK
+        # double-differencing to interpolate the base epoch accurately, causing
+        # a large systematic vertical bias (mean ~13 m, rmse_u ~15 m) that
+        # inflated the Sim(3) 3D APE well above the paper figure. Switching to
+        # this 1 s file cuts rmse_u to ~4 m and brings APE back in line with
+        # paper (mirrors the base-sampling-interval fix already applied to
+        # Deep: 30 s -> 5 s). See research/AUTHOR_METHODOLOGY.md.
+        base="gnss/base/_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx",
         eph="gnss/base/brdc1370.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
         timeout_s=7200,

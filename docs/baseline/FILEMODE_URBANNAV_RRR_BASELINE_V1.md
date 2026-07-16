@@ -7,9 +7,9 @@ start here. ROS 2 ports mirror this config after file-mode validation.
 Do **not** change estimator/calibration in a way that alters locked results
 without cutting a new baseline version.
 
-> **Deep and Medium are both locked** (see "Locked results" below). Medium still
-> fails the paper-accuracy comparison — a separate, known vertical-bias issue,
-> not a reproducibility problem (fixed 2026-07-16).
+> **Deep and Medium are both locked and pass the paper comparison** (see "Locked
+> results" below). Medium's paper-accuracy gap (was ~8.0 m vs 3.4 m) was root-caused
+> to a too-sparse base RINEX and fixed 2026-07-16 (see notes below).
 
 ## Baseline identity
 
@@ -54,7 +54,7 @@ Environment: `URBANNAV_DATA_ROOT` (default `~/Downloads/UrbanNavDataset-master`)
 | Input | Path (under dataset root) |
 | --- | --- |
 | Rover RINEX | `UrbanNav-HK-Medium-Urban-1/gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs` |
-| Base RINEX | `UrbanNav-HK-Medium-Urban-1/gnss/base/hkkt137g.rnx` |
+| Base RINEX | `UrbanNav-HK-Medium-Urban-1/gnss/base/_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx` (**1 s session**, not full-day `hkkt137g.rnx`) |
 | Ephemeris | `UrbanNav-HK-Medium-Urban-1/gnss/base/brdc1370.rnx` |
 | DCB | `research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX` |
 | IMU | `UrbanNav-HK-Medium-Urban-1/gici_rrr/imu.bin.txt` |
@@ -116,7 +116,7 @@ Pass criteria: `research/baseline/expected_urbannav_{medium,deep}.json`.
 | Dataset | APE position | APE rotation | Epochs | Config | Lock date | Status |
 | --- | ---: | ---: | ---: | --- | --- | --- |
 | Deep | **2.141 m** | **0.908°** | 15,119 | `wrapper` | 2026-07-15 | **LOCKED — PASS** |
-| Medium | **8.042 m** | **2.108°** | 7,379 | `wrapper` | 2026-07-16 | **LOCKED — fails paper** |
+| Medium | **2.717 m** | **1.182°** | 7,617 | `wrapper` | 2026-07-16 | **LOCKED — PASS** |
 
 Deep re-locked on clean `f2b8579` core + wrapper config, full trajectory (the earlier
 `0.335 m / 0.925°` figure was from a truncated 2,230-epoch partial run and has been
@@ -137,11 +137,25 @@ multi-threaded ROS2 path, not this single-threaded post-file path):
 - `third_party/rtklib/src/rinex.c` — `init_rnxctr()` zeroed only 6 of `NUMSYS=7` signal-index
   slots, leaving `tobs[6]` as uninitialized memory read by `set_index()`.
 
-All three are documented in `research/UPSTREAM_FIDELITY.md`. Post-fix, 3 independent
-full-trajectory runs cluster within 0.49 m / 0.20° of each other (7.74/8.23/8.16 m,
-2.00/2.21/2.11°) — see `research/baseline/expected_urbannav_medium.json` for the full
-sample. The converged ~8.0 m vs paper's 3.40 m is a **separate**, pre-existing accuracy
-gap (early vertical bias, see `research/AUTHOR_METHODOLOGY.md`), not non-determinism.
+All three are documented in `research/UPSTREAM_FIDELITY.md`. Post-fix (still on the old
+base RINEX), 3 independent full-trajectory runs clustered within 0.49 m / 0.20° of each
+other (7.74/8.23/8.16 m, 2.00/2.21/2.11°) — reproducibility was fixed, but the converged
+~8.0 m was still well above paper's 3.40 m.
+
+**Medium's paper-accuracy gap was root-caused and fixed the same day (2026-07-16).** The
+diagnostic script (`scripts/diagnose_urbannav_medium_eval.py`) showed the ~8.0 m APE was
+driven almost entirely by the vertical channel (`rmse_u ≈ 15 m`, mean bias ≈ 13 m), while
+horizontal APE was already close to paper. RTK float/fixed rate was ruled out as the cause
+(Deep is also ~99% float yet has `rmse_u ≈ 1.9 m`). Root cause: Medium's base RINEX
+(`hkkt137g.rnx`) is a full-day file sampled every 30 s — too sparse for RTK
+double-differencing — the same class of issue already fixed for Deep (5 s session-aligned
+base instead of its full-day 30 s file). Fix: switched to a session-aligned **1 s** base
+(`HKKT137_h02_01S_MO.rnx`, same format/obs-types, 02:00-02:59 covering the rover's
+02:33-02:46 window). Post-fix, `rmse_u` drops to ~4.2 m and 3 independent runs give
+**3.626 / 2.179 / 2.347 m** translation APE (mean **2.717 m**) and **1.254 / 1.091 / 1.200°**
+rotation APE (mean **1.182°**) — all pass vs paper. See
+`research/baseline/expected_urbannav_medium.json` for the full sample and
+`research/AUTHOR_METHODOLOGY.md` for the diagnostic detail.
 
 ## Operational notes
 

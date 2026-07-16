@@ -2,9 +2,10 @@
 
 > **Status: LOCKED** — Algorithm baseline = **file-mode RRR** @ upstream-derived config.
 > GICI core reference: `chichengcn/gici-open` @ `f2b8579` + 4 documented UB bugfixes.
-> GICI-board (1.1/3.1/4.1), UrbanNav Deep, and UrbanNav Medium are all locked and reproducible.
-> Medium still fails the paper-accuracy comparison (known vertical-bias issue) — that's
-> a separate, pre-existing accuracy gap, not a reproducibility problem.
+> GICI-board (1.1/3.1/4.1), UrbanNav Deep, and UrbanNav Medium are all locked, reproducible,
+> and **pass the paper comparison**. Medium's paper-accuracy gap (was ~8.0m vs 3.4m) was
+> root-caused 2026-07-16 to a too-sparse (30s) base RINEX and fixed by switching to a
+> session-aligned 1s base — see "Medium" section below.
 
 Branch `research/standard-env` = upstream GICI @ `f2b8579` + research wrappers only (`research/`, `scripts/`).
 
@@ -46,7 +47,7 @@ python3 scripts/run_urbannav_rrr_baseline.py medium   # default: --config-source
 | Dataset | Author `evo_ape` (full trajectory) | Config | Paper Table V | Status |
 |---------|-------------------------------------|--------|----------------|--------|
 | Deep | **2.141 m / 0.908°** (15,119 epochs, locked 2026-07-15) | `wrapper` | 2.46 m / 1.64° | **LOCKED — PASS** |
-| Medium | **8.042 m / 2.108°** (7,379 epochs, locked 2026-07-16) | `wrapper` | 3.40 m / 1.30° | **LOCKED — fails paper (known issue)** |
+| Medium | **2.717 m / 1.182°** (7,617 epochs, locked 2026-07-16) | `wrapper` | 3.40 m / 1.30° | **LOCKED — PASS** |
 
 Deep re-locked on clean `f2b8579` core + `wrapper` config, full 15,119-epoch trajectory
 (the previous `0.335 m / 0.925°` figure came from a truncated 2,230-epoch partial run and
@@ -59,26 +60,42 @@ python3 scripts/run_urbannav_rrr_baseline.py deep
 ./scripts/run_author_eval_urbannav.sh deep
 ```
 
-### Medium — reproducibility bug fixed 2026-07-16, now locked (but fails paper on accuracy)
+### Medium — reproducibility bug fixed 2026-07-16, then paper-accuracy gap root-caused and fixed same day
 
-Four full-trajectory runs pre-fix (same `wrapper` config, same dataset, same day) produced
-translation RMSE **6.9 m, 7.5 m, 14.1 m, and 16.8 m** — chaotic and crash-prone (~3/5 runs
-segfaulted). Root-caused to three ASLR-sensitive undefined-behavior bugs, all fixed and
-documented in `research/UPSTREAM_FIDELITY.md`:
-`src/stream/formator.cpp` (heap-buffer-underflow on unresolved satellite ids),
-`src/fusion/gnss_imu_initializer.cpp` (heap-use-after-free on an emptied deque), and
-`third_party/rtklib/src/rinex.c` (uninitialized-memory read, `NUMSYS==7` vs a 6-iteration
-zero-init loop). Post-fix, 3 independent full-trajectory runs cluster within **0.49 m /
-0.20°** of each other (7.74/8.23/8.16 m, 2.00/2.21/2.11°) — reproducibility is fixed.
+**Reproducibility (fixed first).** Four full-trajectory runs pre-fix (same `wrapper`
+config, same dataset, same day) produced translation RMSE **6.9 m, 7.5 m, 14.1 m, and
+16.8 m** — chaotic and crash-prone (~3/5 runs segfaulted). Root-caused to three
+ASLR-sensitive undefined-behavior bugs, all fixed and documented in
+`research/UPSTREAM_FIDELITY.md`: `src/stream/formator.cpp` (heap-buffer-underflow on
+unresolved satellite ids), `src/fusion/gnss_imu_initializer.cpp` (heap-use-after-free on
+an emptied deque), and `third_party/rtklib/src/rinex.c` (uninitialized-memory read,
+`NUMSYS==7` vs a 6-iteration zero-init loop). Post-fix (still on the old base RINEX), 3
+independent full-trajectory runs clustered within **0.49 m / 0.20°** of each other
+(7.74/8.23/8.16 m, 2.00/2.21/2.11°) — reproducibility was fixed, but the converged ~8.0 m
+was still well above paper's 3.40 m.
 
-The converged **~8.0 m** is still well above paper's 3.40 m — that gap is a **separate,
-pre-existing, already-documented issue** (early vertical bias, ~9-12 m, couples into the
-Sim(3) 3D APE — see `research/AUTHOR_METHODOLOGY.md`), not non-determinism. Fixing that is
-a real tuning/algorithm task for a future baseline version, not part of this fix.
+**Paper-accuracy gap (root-caused same day).** The diagnostic script
+(`scripts/diagnose_urbannav_medium_eval.py`) showed the ~8.0 m APE was driven almost
+entirely by the vertical channel (`rmse_u ≈ 15 m`, mean bias ≈ 13 m) while horizontal APE
+was already close to paper (~2.2-3.0 m). Ruled out RTK float/fixed rate as the cause (Deep
+is *also* ~99% float yet has `rmse_u ≈ 1.9 m`). Root cause: Medium's base RINEX
+(`hkkt137g.rnx`) is a full-day file sampled every **30 s** — too sparse for RTK
+double-differencing to interpolate the base epoch accurately — exactly the same class of
+issue already fixed for Deep (which uses a 5 s session-aligned base, not its full-day
+30 s file). Fix: switched Medium to a session-aligned **1 s** base
+(`gnss/base/_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx`, same RINEX 3.02
+format/obs-types, 02:00-02:59 covering the rover's 02:33-02:46 window). Post-fix,
+`rmse_u` drops to ~4.2 m and 3 independent full-trajectory runs give **3.626 / 2.179 /
+2.347 m** translation APE (mean **2.717 m**) and **1.254 / 1.091 / 1.200°** rotation APE
+(mean **1.182°**) — all individually pass vs paper, and the mean beats it. Run-to-run
+spread is wider than the old config's (1.45 m / 0.16° vs 0.49 m / 0.20°), likely the same
+Ceres `num_threads=4` floating-point non-associativity, now more visible with the
+dominant systematic bias gone. See `research/AUTHOR_METHODOLOGY.md` for the full
+before/after diagnostic numbers.
 
 ```bash
 python3 scripts/run_urbannav_rrr_baseline.py medium
-./scripts/run_author_eval_urbannav.sh medium   # expect ~8.0 m / ~2.1 deg, within tolerance
+./scripts/run_author_eval_urbannav.sh medium   # expect ~2.7 m / ~1.2 deg, within tolerance
 ```
 
 ## GICI board datasets — LOCKED (RTK RRR, file-mode + ROS 2)

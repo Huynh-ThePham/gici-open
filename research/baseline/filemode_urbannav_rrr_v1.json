@@ -49,7 +49,8 @@
       "scene_dir": "UrbanNav-HK-Medium-Urban-1",
       "inputs": {
         "rover": "gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs",
-        "base": "gnss/base/hkkt137g.rnx",
+        "base": "gnss/base/_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx",
+        "base_note": "Session-aligned 1 s base (02:00-02:59); full-day 30 s hkkt137g.rnx gives ~13 m vertical bias (see AUTHOR_METHODOLOGY.md)",
         "eph": "gnss/base/brdc1370.rnx",
         "dcb": {
           "path": "research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
@@ -62,14 +63,22 @@
       },
       "gps_week_day_offset": 86400.0,
       "locked": {
-        "status": "LOCKED -- reproducible (3/3 runs), fails paper (known vertical-bias issue)",
+        "status": "LOCKED -- reproducible (3/3 runs) AND passes paper",
         "config_source": "wrapper",
         "lock_date": "2026-07-16",
-        "ape_translation_rmse_m": 8.0417,
-        "ape_rotation_rmse_deg": 2.108,
+        "ape_translation_rmse_m": 2.7172,
+        "ape_rotation_rmse_deg": 1.182,
         "expected_file": "research/baseline/expected_urbannav_medium.json",
-        "solution_gpgga_epochs": 7379,
-        "note": "Mean of 3 post-fix runs (7.7367/8.2291/8.1594 m, 2.003/2.206/2.114 deg -- 0.49m/0.20deg spread). Pre-fix, 4 runs of this exact config+dataset gave 6.9/7.5/14.1/16.8 m (chaotic, ~3/5 segfault rate). Root cause: 3 undefined-behavior bugs (heap-buffer-underflow in formator.cpp, heap-use-after-free in gnss_imu_initializer.cpp, uninitialized read in third_party/rtklib/src/rinex.c) -- see research/UPSTREAM_FIDELITY.md. The old 3.214458/6.32456 figure below (1490 epochs) was a truncated partial run from before any of this was understood, retired -- kept only for archaeology.",
+        "solution_gpgga_epochs": 7617,
+        "note": "Mean of 3 runs (3.626/2.179/2.347 m, 1.254/1.091/1.200 deg -- 1.45m/0.16deg spread) on the corrected session-aligned 1s base RINEX (HKKT137_h02_01S_MO.rnx). Root cause of the prior paper-accuracy gap: the previously-used full-day 30s base (hkkt137g.rnx) was too sparse for RTK double-differencing, causing a systematic ~13m vertical bias -- fixed by switching to the 1s base, mirroring the base-interval fix already applied to Deep. See research/AUTHOR_METHODOLOGY.md.",
+        "retired_oldbase_reproducible_fails_paper": {
+          "ape_translation_rmse_m": 8.0417,
+          "ape_rotation_rmse_deg": 2.108,
+          "solution_gpgga_epochs": 7379,
+          "gnss_base": "gnss/base/hkkt137g.rnx",
+          "note": "Reproducible (3/3 runs after fixing 3 UB bugs) but failed paper due to base-interval vertical bias; superseded same day by the base-file fix above.",
+          "lock_date": "2026-07-16"
+        },
         "retired_truncated_run": {
           "ape_translation_rmse_m": 3.214458,
           "ape_rotation_rmse_deg": 6.32456,
