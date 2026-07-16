@@ -17,6 +17,7 @@
     "ape_translation_rmse_m": 0.35,
     "ape_rotation_rmse_deg": 0.35
   },
+  "status": "NOT LOCKED — open reproducibility bug, do not treat locked_reproduce_2026_07_15 below as authoritative",
   "locked_reproduce_2026_07_15": {
     "ape_translation_rmse_m": 14.1252,
     "ape_rotation_rmse_deg": 1.847,
@@ -24,7 +25,7 @@
     "solution_gpgga_epochs": 7379,
     "supplementary_rmse_h_m": 2.734,
     "eval_pipeline": "author_readme4_interp_gt_full",
-    "notes": "Full trajectory evo_ape — no trim, no tst_rmse_h. Author ros RRR estimate block + post-file stream."
+    "notes": "One of (at least) four full-trajectory runs of this exact config+dataset, which produced ape_translation_rmse_m of 14.1, 7.5, 6.9, and 16.8 m respectively (rotation comparatively stable at 1.85-2.08 deg). Root-caused to an ASLR-sensitive memory-safety bug reproduced as a ~3/5 segfault rate at src/stream/data_integration.cpp:325 -- not config drift, not RANSAC. Do not lock a Medium number until repeated runs agree after the bug is fixed; see research/BASELINE_LOCK.md."
   },
   "author_reference_target": {
     "ape_translation_rmse_m": 4.55,
@@ -35,5 +36,5 @@
     "ape_translation_rmse_m": 0.20,
     "ape_rotation_rmse_deg": 0.50
   },
-  "notes": "Honest pass/fail: evo_ape Sim(3) on FULL solution only. Medium fails paper on 3D APE (early vertical bias); rmse_h smoke ~2.7 m."
+  "notes": "Non-reproducible pending bug fix (see status field) -- pass/fail against locked_reproduce_2026_07_15 is not meaningful right now. Historical note: Medium was also known to inflate 3D APE vs paper via an early vertical bias; that may still be a real, separate contributor once the reproducibility bug is fixed."
 }

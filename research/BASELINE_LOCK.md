@@ -1,7 +1,9 @@
 # Research Baseline Lock
 
-> **Status: LOCKED** — Algorithm baseline = **file-mode RRR** @ upstream-derived config.
+> **Status: PARTIALLY LOCKED** — Algorithm baseline = **file-mode RRR** @ upstream-derived config.
 > GICI core reference: `chichengcn/gici-open` @ `f2b8579`.
+> GICI-board (1.1/3.1/4.1) and UrbanNav Deep are locked and reproducible.
+> **UrbanNav Medium is NOT locked** — open reproducibility bug, see below.
 
 Branch `research/standard-env` = upstream GICI @ `f2b8579` + research wrappers only (`research/`, `scripts/`).
 
@@ -11,7 +13,7 @@ See `research/AUTHOR_METHODOLOGY.md`, `research/UPSTREAM_FIDELITY.md`,
 `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`.
 
 ```bash
-./scripts/verify_upstream_fidelity.sh   # must print OK (zero core delta vs f2b8579)
+./scripts/verify_upstream_fidelity.sh   # must print OK (upstream + documented safety bugfixes only)
 ```
 
 ## Upstream identity
@@ -21,7 +23,7 @@ See `research/AUTHOR_METHODOLOGY.md`, `research/UPSTREAM_FIDELITY.md`,
 | Author repo | `chichengcn/gici-open` |
 | Locked commit | `f2b8579` |
 | Marker commit | `8adde32` |
-| Source delta | **0 files** in `include/`, `src/`, `tools/evaluation/`, `option/` |
+| Source delta | **3 files** in `src/` — documented memory-safety/UB bugfixes only, no algorithm/tuning changes; see `research/UPSTREAM_FIDELITY.md` and `scripts/verify_upstream_fidelity.sh` |
 
 ## UrbanNav file-mode RRR — PRIMARY (algorithm baseline)
 
@@ -42,17 +44,35 @@ python3 scripts/run_urbannav_rrr_baseline.py medium   # default: --config-source
 ./scripts/run_author_eval_urbannav.sh medium
 ```
 
-| Dataset | Author `evo_ape` (locked 2026-07-14) | Config | Paper Table V |
-|---------|--------------------------------------|--------|---------------|
-| Medium | **3.214 m / 6.325°** | `wrapper` | 3.40 m / 1.30° |
-| Deep | **0.335 m / 0.925°** | `wrapper` | 2.46 m / 1.64° |
+| Dataset | Author `evo_ape` (full trajectory) | Config | Paper Table V | Status |
+|---------|-------------------------------------|--------|----------------|--------|
+| Deep | **2.141 m / 0.908°** (15,119 epochs, locked 2026-07-15) | `wrapper` | 2.46 m / 1.64° | **LOCKED — PASS** |
+| Medium | **NOT LOCKED** — see below | `wrapper` | 3.40 m / 1.30° | **OPEN BUG** |
 
-Re-locked on clean `f2b8579` core + `wrapper` config. Run:
+Deep re-locked on clean `f2b8579` core + `wrapper` config, full 15,119-epoch trajectory
+(the previous `0.335 m / 0.925°` figure came from a truncated 2,230-epoch partial run and
+has been retired — see `research/UPSTREAM_FIDELITY.md`/git history if you need the old
+number for archaeology). Run:
 
 ```bash
 ./scripts/verify_upstream_fidelity.sh
+python3 scripts/run_urbannav_rrr_baseline.py deep
+./scripts/run_author_eval_urbannav.sh deep
+```
+
+### Medium — open reproducibility bug, do not treat any single number as "the" baseline
+
+Four independent full-trajectory runs (same `wrapper` config, same dataset, same day)
+produced translation RMSE **6.9 m, 7.5 m, 14.1 m, and 16.8 m** respectively (rotation RMSE
+1.85–2.08°, comparatively stable). This is **not** config drift — root-caused to a real,
+ASLR-sensitive memory-safety bug reproduced with a segfault ~3/5 runs at
+`src/stream/data_integration.cpp:325`; see the fix tracked in that file / commit history
+for status. **Do not lock a Medium number until repeated runs agree** (e.g. 5/5 runs within
+tolerance) after the underlying bug is fixed.
+
+```bash
 python3 scripts/run_urbannav_rrr_baseline.py medium
-./scripts/run_author_eval_urbannav.sh medium
+./scripts/run_author_eval_urbannav.sh medium   # currently non-reproducible, expect variance
 ```
 
 ## GICI board datasets — LOCKED (RTK RRR, file-mode + ROS 2)
@@ -70,12 +90,15 @@ Locked `evo_ape` (Sim(3), full trajectory), 2026-07-15:
 
 | Scene | file-mode pos/rot | ROS 2 pos/rot | Paper Table V |
 |-------|-------------------|---------------|---------------|
-| 1.1 open-sky      | 0.029 m / 0.466° | 0.029 m / 0.479° | 0.03 m / 0.54° |
+| 1.1 open-sky      | 0.029 m / 0.466° | 0.029 m / 0.474° | 0.03 m / 0.54° |
 | 3.1 typical-urban | 0.142 m / 1.078° | 0.141 m / 1.157° | 0.29 m / 1.58° |
 | 4.1 dense-urban   | 0.073 m / 0.696° | 0.070 m / 0.733° | 0.08 m / 0.54° |
 
-All PASS vs paper. File-mode ↔ ROS 2 agree to mm (position) / ~0.01–0.08° (rotation),
-validating the ROS 2 wrapper as estimator-equivalent to file-mode.
+All PASS vs paper (`paper_pass`). File-mode ↔ ROS 2 agree to mm (position) / ~0.01–0.08°
+(rotation), validating the ROS 2 wrapper as estimator-equivalent to file-mode.
+`locked_reference`/`pass` (exact reproduction of these numbers, tighter tolerance than
+the paper comparison) is tracked per scene in `research/baseline/expected_{1_1,gici_board_3_1,gici_board_4_1}.json`
+via `scripts/run_author_eval_gici_board.sh` — 1.1/3.1/4.1 all have a locked reference now.
 Metrics: `results/baseline/gici_board{,_ros2}/<id>/evaluation/ape_metrics.json`.
 
 ## ROS 2 (UrbanNav — secondary wrapper port)

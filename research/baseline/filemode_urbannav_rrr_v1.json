@@ -13,7 +13,9 @@
   },
   "config": {
     "template": "research/config/rtk_imu_camera_rrr_urbannav.yaml",
-    "template_sha256": "e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4",
+    "template_branch": "research/standard-env",
+    "template_sha256": "d8250202c7a878375fd9b33270f1b646fea286905e506f018b86967e9a55d271",
+    "template_sha256_note": "Updated after the RRR estimator tuning commit on research/standard-env (rtk_options/gnss_estimator_base_options reshape, enable_input_align: false). The old e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4 hash matched only the retired truncated-run figure below, not any of the current full-trajectory numbers.",
     "canonical_source": "wrapper",
     "invalid_sources": [
       "UrbanNavDataset/.../gici_rrr/config.yaml"
@@ -32,7 +34,7 @@
     "key_estimator_fields": {
       "output_align_tag": "str_imu_file",
       "output_downsample_rate": 40,
-      "enable_input_align": true,
+      "enable_input_align": false,
       "input_align_latency": 0.2,
       "max_keyframes": 20,
       "use_ambiguity_resolution": true,
@@ -60,14 +62,18 @@
       },
       "gps_week_day_offset": 86400.0,
       "locked": {
+        "status": "NOT LOCKED -- open reproducibility bug",
         "config_source": "wrapper",
-        "lock_date": "2026-07-14",
-        "ape_translation_rmse_m": 3.214458,
-        "ape_rotation_rmse_deg": 6.32456,
         "expected_file": "research/baseline/expected_urbannav_medium.json",
-        "solution_gpgga_epochs": 1490,
-        "author_eval_matched_poses": 1489,
-        "gici_main_exit_code": -6
+        "note": "Four full-trajectory (7379-epoch) runs of this exact config+dataset gave ape_translation_rmse_m of 6.9/7.5/14.1/16.8 m (rotation stable ~1.85-2.08 deg). Root cause: ASLR-sensitive memory-safety bug, ~3/5 segfault rate at src/stream/data_integration.cpp:325. The old 3.214458/6.32456 figure below (1490 epochs) was a truncated partial run, retired -- kept only for archaeology.",
+        "retired_truncated_run": {
+          "ape_translation_rmse_m": 3.214458,
+          "ape_rotation_rmse_deg": 6.32456,
+          "solution_gpgga_epochs": 1490,
+          "author_eval_matched_poses": 1489,
+          "gici_main_exit_code": -6,
+          "lock_date": "2026-07-14"
+        }
       }
     },
     "deep": {
@@ -89,14 +95,15 @@
       },
       "gps_week_day_offset": 432000.0,
       "locked": {
+        "status": "LOCKED -- PASS",
         "config_source": "wrapper",
-        "lock_date": "2026-07-14",
-        "ape_translation_rmse_m": 0.334531,
-        "ape_rotation_rmse_deg": 0.924817,
+        "lock_date": "2026-07-15",
+        "ape_translation_rmse_m": 2.141,
+        "ape_rotation_rmse_deg": 0.908,
         "expected_file": "research/baseline/expected_urbannav_deep.json",
-        "solution_gpgga_epochs": 2230,
-        "author_eval_matched_poses": 2229,
-        "gici_main_exit_code": -6
+        "solution_gpgga_epochs": 15119,
+        "author_eval_matched_poses": 15101,
+        "note": "Full trajectory (retired the prior 0.334531/6.32456-scene 2230-epoch truncated-run figure, kept in git history)."
       }
     }
   },
