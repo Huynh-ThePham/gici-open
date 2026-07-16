@@ -9,6 +9,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 
 #include "gici/estimate/graph.h"
 #include "gici/estimate/estimator_types.h"
@@ -196,8 +197,17 @@ protected:
   // we compute covariance every time an optimization has finished, this is to
   // avoid thread conflict when we call compteCovariance while the other threads
   // are operating the graph.
-  std::map<double, Eigen::Matrix<double, 15, 15>> covariances_;  
+  std::map<double, Eigen::Matrix<double, 15, 15>> covariances_;
   bool can_compute_covariance_ = false;
+
+  // Real-time (multi-thread) fix: guards states_, covariances_, and graph_
+  // (both the optimize()/solve() write path and the getPoseEstimate/
+  // getSpeedAndBiasEstimate/getCovariance read path) against concurrent
+  // access from another thread (e.g. the image-frontend thread calling
+  // getPoseEstimateAt while the backend thread is mutating the same state).
+  // Recursive because the *At() accessors and optimize() call into the
+  // state-taking helpers (getPoseEstimate(state), etc.) which also lock it.
+  mutable std::recursive_mutex estimator_state_mutex_;
 
   // Coordinate handle
   GeoCoordinatePtr coordinate_;

@@ -20,5 +20,10 @@
   "tolerance": {
     "ape_translation_rmse_m": 0.005,
     "ape_rotation_rmse_deg": 0.1
+  },
+  "verified_post_ub_fix_2026_07_16": {
+    "file_mode": {"ape_translation_rmse_m": 0.0290, "ape_rotation_rmse_deg": 0.477},
+    "ros2": {"ape_translation_rmse_m": 0.0288, "ape_rotation_rmse_deg": 0.498},
+    "notes": "Re-verified against the core built with all 4 UB bugfixes (formator.cpp, gnss_imu_initializer.cpp, data_integration.cpp, third_party/rtklib/src/rinex.c) -- ROS2 workspace was also rebuilt to pick up the fixes. Numbers unchanged within noise vs locked_reproduce_2026_07_11: those bugs don't trigger on GICI-board data."
   }
 }

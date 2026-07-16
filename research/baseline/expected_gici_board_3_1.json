@@ -12,8 +12,18 @@
     "ape_translation_rmse_m": 0.35,
     "ape_rotation_rmse_deg": 0.35
   },
+  "locked_reproduce_2026_07_15": {
+    "ape_translation_rmse_m": 0.142181,
+    "ape_rotation_rmse_deg": 1.078317,
+    "solution_epochs": 4733
+  },
   "tolerance": {
     "ape_translation_rmse_m": 0.05,
     "ape_rotation_rmse_deg": 0.15
+  },
+  "verified_post_ub_fix_2026_07_16": {
+    "file_mode": {"ape_translation_rmse_m": 0.1398, "ape_rotation_rmse_deg": 1.184},
+    "ros2": {"ape_translation_rmse_m": 0.1397, "ape_rotation_rmse_deg": 1.206},
+    "notes": "Re-verified against the core built with all 4 UB bugfixes; ROS2 workspace rebuilt to pick up the fixes. Numbers unchanged within noise vs locked_reproduce_2026_07_15."
   }
 }

@@ -122,11 +122,12 @@ rot_rmse = parse_rmse(eval_dir / "ape_rotation.txt")
 expected = json.loads(expected_path.read_text())
 paper = expected["paper_reference"]
 paper_tol = expected.get("paper_tolerance", {"ape_translation_rmse_m": 0.35, "ape_rotation_rmse_deg": 0.35})
-locked = (
-    expected.get("locked_reproduce_2026_07_15")
-    or expected.get("locked_reproduce_2026_07_14")
-    or expected.get("locked_reproduce_2026_07_11")
+# Locked-reference key is date-stamped (e.g. locked_reproduce_2026_07_16); take
+# the most recent one present rather than hardcoding specific dates.
+locked_key = max(
+    (k for k in expected if k.startswith("locked_reproduce_")), default=None
 )
+locked = expected.get(locked_key) if locked_key else None
 
 metrics = {
     "dataset": f"urbannav_{dataset}",

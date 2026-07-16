@@ -205,6 +205,7 @@ root = Path("${STRESS_ROOT}")
 rows = list(csv.DictReader((root / "summary.csv").read_text().splitlines()))
 pos = [float(r["ape_pos_m"]) for r in rows if r["ape_pos_m"] not in ("", "nan")]
 rot = [float(r["ape_rot_deg"]) for r in rows if r["ape_rot_deg"] not in ("", "nan")]
+sparsify = [int(r["sparsify_count"]) for r in rows if r["sparsify_count"] not in ("", "nan")]
 failed = [r.strip() for r in """${failed_runs[*]}""".split() if r.strip()]
 summary = {
   "dataset": "${DATASET_ID}",
@@ -235,6 +236,23 @@ summary = {
     "max": max(rot) if rot else None,
     "mean": statistics.mean(rot) if rot else None,
     "stdev": statistics.pstdev(rot) if len(rot) > 1 else 0.0,
+  },
+  "sparsify_count": {
+    "min": min(sparsify) if sparsify else None,
+    "max": max(sparsify) if sparsify else None,
+    "mean": statistics.mean(sparsify) if sparsify else None,
+    "stdev": statistics.pstdev(sparsify) if len(sparsify) > 1 else 0.0,
+    # Backend-overload early warning: runs sparsifying far more than the batch's
+    # own norm tend to starve visual updates and blow up rotation APE well before
+    # position APE moves much (seen empirically: batch30 runs 015/021 sparsified
+    # ~2x the batch mean and lost 20-40x nominal rotation APE). Not a pass/fail
+    # gate -- just surfaces the leading indicator instead of only the trailing one.
+    "outlier_runs": [
+      r["run"] for r in rows
+      if r["sparsify_count"] not in ("", "nan")
+      and len(sparsify) > 1
+      and int(r["sparsify_count"]) > statistics.mean(sparsify) + 2 * statistics.pstdev(sparsify)
+    ],
   },
   "pass_all": (
     int("${pass_complete}") == ${RUNS}
@@ -269,6 +287,10 @@ printf 'APE pos OK:              %s/%s\n' "${pass_ape}" "${RUNS}"
 printf 'APE strict (pos+rot):    %s/%s\n' "${pass_ape_strict}" "${RUNS}"
 if ((${#failed_runs[@]})); then
   printf 'Failed runs: %s\n' "${failed_runs[*]}"
+fi
+sparsify_outliers="$(python3 -c "import json; d=json.load(open('${JSON}'))['sparsify_count']; print(' '.join(d['outlier_runs']))" 2>/dev/null || true)"
+if [[ -n "${sparsify_outliers}" ]]; then
+  printf 'Sparsify outliers (backend-overload early warning): %s\n' "${sparsify_outliers}"
 fi
 printf 'CSV : %s\n' "${CSV}"
 printf 'JSON: %s\n' "${JSON}"

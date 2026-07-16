@@ -13,7 +13,9 @@
   },
   "config": {
     "template": "research/config/rtk_imu_camera_rrr_urbannav.yaml",
-    "template_sha256": "e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4",
+    "template_branch": "research/standard-env",
+    "template_sha256": "d8250202c7a878375fd9b33270f1b646fea286905e506f018b86967e9a55d271",
+    "template_sha256_note": "Updated after the RRR estimator tuning commit on research/standard-env (rtk_options/gnss_estimator_base_options reshape, enable_input_align: false). The old e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4 hash matched only the retired truncated-run figure below, not any of the current full-trajectory numbers.",
     "canonical_source": "wrapper",
     "invalid_sources": [
       "UrbanNavDataset/.../gici_rrr/config.yaml"
@@ -32,7 +34,7 @@
     "key_estimator_fields": {
       "output_align_tag": "str_imu_file",
       "output_downsample_rate": 40,
-      "enable_input_align": true,
+      "enable_input_align": false,
       "input_align_latency": 0.2,
       "max_keyframes": 20,
       "use_ambiguity_resolution": true,
@@ -47,7 +49,8 @@
       "scene_dir": "UrbanNav-HK-Medium-Urban-1",
       "inputs": {
         "rover": "gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs",
-        "base": "gnss/base/hkkt137g.rnx",
+        "base": "gnss/base/_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx",
+        "base_note": "Session-aligned 1 s base (02:00-02:59); full-day 30 s hkkt137g.rnx gives ~13 m vertical bias (see AUTHOR_METHODOLOGY.md)",
         "eph": "gnss/base/brdc1370.rnx",
         "dcb": {
           "path": "research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
@@ -60,14 +63,30 @@
       },
       "gps_week_day_offset": 86400.0,
       "locked": {
+        "status": "LOCKED -- reproducible (3/3 runs) AND passes paper",
         "config_source": "wrapper",
-        "lock_date": "2026-07-14",
-        "ape_translation_rmse_m": 3.214458,
-        "ape_rotation_rmse_deg": 6.32456,
+        "lock_date": "2026-07-16",
+        "ape_translation_rmse_m": 2.7172,
+        "ape_rotation_rmse_deg": 1.182,
         "expected_file": "research/baseline/expected_urbannav_medium.json",
-        "solution_gpgga_epochs": 1490,
-        "author_eval_matched_poses": 1489,
-        "gici_main_exit_code": -6
+        "solution_gpgga_epochs": 7617,
+        "note": "Mean of 3 runs (3.626/2.179/2.347 m, 1.254/1.091/1.200 deg -- 1.45m/0.16deg spread) on the corrected session-aligned 1s base RINEX (HKKT137_h02_01S_MO.rnx). Root cause of the prior paper-accuracy gap: the previously-used full-day 30s base (hkkt137g.rnx) was too sparse for RTK double-differencing, causing a systematic ~13m vertical bias -- fixed by switching to the 1s base, mirroring the base-interval fix already applied to Deep. See research/AUTHOR_METHODOLOGY.md.",
+        "retired_oldbase_reproducible_fails_paper": {
+          "ape_translation_rmse_m": 8.0417,
+          "ape_rotation_rmse_deg": 2.108,
+          "solution_gpgga_epochs": 7379,
+          "gnss_base": "gnss/base/hkkt137g.rnx",
+          "note": "Reproducible (3/3 runs after fixing 3 UB bugs) but failed paper due to base-interval vertical bias; superseded same day by the base-file fix above.",
+          "lock_date": "2026-07-16"
+        },
+        "retired_truncated_run": {
+          "ape_translation_rmse_m": 3.214458,
+          "ape_rotation_rmse_deg": 6.32456,
+          "solution_gpgga_epochs": 1490,
+          "author_eval_matched_poses": 1489,
+          "gici_main_exit_code": -6,
+          "lock_date": "2026-07-14"
+        }
       }
     },
     "deep": {
@@ -89,14 +108,15 @@
       },
       "gps_week_day_offset": 432000.0,
       "locked": {
+        "status": "LOCKED -- PASS",
         "config_source": "wrapper",
-        "lock_date": "2026-07-14",
-        "ape_translation_rmse_m": 0.334531,
-        "ape_rotation_rmse_deg": 0.924817,
+        "lock_date": "2026-07-15",
+        "ape_translation_rmse_m": 2.141,
+        "ape_rotation_rmse_deg": 0.908,
         "expected_file": "research/baseline/expected_urbannav_deep.json",
-        "solution_gpgga_epochs": 2230,
-        "author_eval_matched_poses": 2229,
-        "gici_main_exit_code": -6
+        "solution_gpgga_epochs": 15119,
+        "author_eval_matched_poses": 15101,
+        "note": "Full trajectory (retired the prior 0.334531/6.32456-scene 2230-epoch truncated-run figure, kept in git history)."
       }
     }
   },

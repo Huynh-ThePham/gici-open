@@ -141,12 +141,19 @@ bool ImuEstimatorBase::getMotionFromEstimateAndImuIntegration(
 bool ImuEstimatorBase::getPoseEstimateAt(
   const double timestamp, Transformation& T_WS)
 {
+  // Real-time (multi-thread) fix: the whole function -- including the
+  // last_timestamp_/last_T_WS_ cache check up front and the cache writes at
+  // the end -- must be under one critical section. The previous version only
+  // locked the states_ traversal in the middle, leaving the cache reads/
+  // writes racing against a concurrent call on another thread (e.g. the
+  // image-frontend thread vs the backend/estimator thread).
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+
   // Check if we have already applied integration
   if (checkEqual(timestamp, last_timestamp_)) {
     T_WS = last_T_WS_; return true;
   }
 
-  imu_state_mutex_.lock();
   State base_state;
   int end_index = states_.back().valid() ? states_.size() - 1 : states_.size() - 2;
   for (int i = states_.size() - 1; i >= 0; i--) {
@@ -160,18 +167,18 @@ bool ImuEstimatorBase::getPoseEstimateAt(
     }
   }
   // no suitable state
-  if (!base_state.valid()) { 
-    imu_state_mutex_.unlock(); return false;
+  if (!base_state.valid()) {
+    return false;
   }
   // not sufficiant IMU data
-  if (imu_measurements_.back().timestamp < timestamp) { 
-    imu_state_mutex_.unlock(); return false;
+  if (imu_measurements_.back().timestamp < timestamp) {
+    return false;
   }
 
   // check duration
   double dt = timestamp - base_state.timestamp;
   if (dt > 2.0) {
-    LOG(WARNING) << "Large integration duration, " 
+    LOG(WARNING) << "Large integration duration, "
                  << dt << "s. The result maybe incorrect!";
   }
 
@@ -180,7 +187,7 @@ bool ImuEstimatorBase::getPoseEstimateAt(
   SpeedAndBias speed_and_bias;
   Eigen::Matrix<double, 15, 15> covariance; covariance.setZero();
   // start from base state
-  if (!checkEqual(last_base_state_.timestamp, base_state.timestamp) || 
+  if (!checkEqual(last_base_state_.timestamp, base_state.timestamp) ||
       !checkLessEqual(last_timestamp_, timestamp)) {
     if (need_covariance_) {
       ret = getMotionFromEstimateAndImuIntegration(
@@ -206,8 +213,6 @@ bool ImuEstimatorBase::getPoseEstimateAt(
     }
   }
 
-  imu_state_mutex_.unlock();
-
   // store for other function call or latter call
   last_timestamp_ = timestamp;
   last_base_state_ = base_state;
@@ -222,6 +227,11 @@ bool ImuEstimatorBase::getPoseEstimateAt(
 bool ImuEstimatorBase::getSpeedAndBiasEstimateAt(
   const double timestamp, SpeedAndBias& speed_and_bias)
 {
+  // Real-time (multi-thread) fix: lock the whole function (cache check,
+  // getPoseEstimateAt call, cache read) -- getPoseEstimateAt re-enters the
+  // same recursive_mutex, so this is safe.
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+
   // Check if we have already applied integration
   if (checkEqual(timestamp, last_timestamp_)) {
     speed_and_bias = last_speed_and_bias_; return true;
@@ -239,6 +249,11 @@ bool ImuEstimatorBase::getSpeedAndBiasEstimateAt(
 bool ImuEstimatorBase::getCovarianceAt(
   const double timestamp, Eigen::Matrix<double, 15, 15>& covariance)
 {
+  // Real-time (multi-thread) fix: lock the whole function -- same reasoning
+  // as getSpeedAndBiasEstimateAt above, plus this function also writes
+  // need_covariance_/last_timestamp_/last_base_state_ directly.
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+
   // Check if we have already applied integration
   if (checkEqual(timestamp, last_timestamp_) && need_covariance_) {
     covariance = last_covariance_; return true;
@@ -511,7 +526,7 @@ size_t ImuEstimatorBase::insertImuState(
   const SpeedAndBias& speed_and_bias_prior,
   const bool use_prior)
 {
-  imu_state_mutex_.lock();
+  estimator_state_mutex_.lock();
 
   // Get the latest state
   bool has_invalid_state = false;
@@ -552,7 +567,7 @@ size_t ImuEstimatorBase::insertImuState(
     }
     State::overlaps.insert(std::make_pair(state.id_in_graph, (*it_cur)));
 
-    imu_state_mutex_.unlock();
+    estimator_state_mutex_.unlock();
     return overlap_index + 1;
   }
   // At the front of the window
@@ -574,7 +589,7 @@ size_t ImuEstimatorBase::insertImuState(
       addImuResidualBlock(states_[0], states_[1]);
     }
 
-    imu_state_mutex_.unlock();
+    estimator_state_mutex_.unlock();
     return 0;
   }
   // At the end of the window
@@ -598,7 +613,7 @@ size_t ImuEstimatorBase::insertImuState(
     // connect the last state to current
     addImuResidualBlock(lastState(), curState());
     
-    imu_state_mutex_.unlock();
+    estimator_state_mutex_.unlock();
     return states_.size() - 1;
   }
   // Inside the window, we break the IMU connections and reform them
@@ -644,11 +659,11 @@ size_t ImuEstimatorBase::insertImuState(
     // add RHS IMU connection
     addImuResidualBlock(cur_state, state_rhs);
 
-    imu_state_mutex_.unlock();
+    estimator_state_mutex_.unlock();
     return index_lhs + 1;
   }
 
-  imu_state_mutex_.unlock();
+  estimator_state_mutex_.unlock();
   return 0;
 }
 
@@ -835,7 +850,7 @@ void ImuEstimatorBase::eraseImuResidualBlock(const State& last_state, State& cur
 // Erase a state inside or at the ends of windows
 void ImuEstimatorBase::eraseImuState(const State& state)
 {
-  imu_state_mutex_.lock();
+  estimator_state_mutex_.lock();
 
   // Overlaped state
   if (State::overlaps.count(state.id_in_graph) > 1) {
@@ -846,7 +861,7 @@ void ImuEstimatorBase::eraseImuState(const State& state)
       if (it->id == state.id) { states_.erase(it); break; }
     }
 
-    imu_state_mutex_.unlock();
+    estimator_state_mutex_.unlock();
     return;
   }
 
@@ -888,7 +903,7 @@ void ImuEstimatorBase::eraseImuState(const State& state)
     }
   }
 
-  imu_state_mutex_.unlock();
+  estimator_state_mutex_.unlock();
 }
 
 // Down-weight IMU residual block
