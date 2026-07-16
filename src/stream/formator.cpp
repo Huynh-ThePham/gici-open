@@ -636,10 +636,18 @@ int RINEXFormator::decode(const uint8_t *buf, int size,
         bool valid = true;
         if (type == 1) { /* GLONASS ephemeris */
           sys = satsys(geph.sat, &prn);
-          rnx_.nav.geph[prn-1] = geph;
-          rnx_.time = geph.tof;
-          rnx_.ephsat = geph.sat;
-          rnx_.ephset = 0;
+          // satsys() leaves prn unresolved (<=0) for a satellite number it
+          // can't map to a GLONASS slot -- nav.geph is sized NSATGLO, so an
+          // unguarded prn-1 index underflows the heap allocation.
+          if (prn >= 1 && prn <= NSATGLO) {
+            rnx_.nav.geph[prn-1] = geph;
+            rnx_.time = geph.tof;
+            rnx_.ephsat = geph.sat;
+            rnx_.ephset = 0;
+          }
+          else {
+            LOG(WARNING) << "Invalid GLONASS satellite slot (prn=" << prn << "), skipping ephemeris";
+          }
         }
         else { /* other ephemeris */
           sys = satsys(eph.sat, &prn);
@@ -648,6 +656,11 @@ int RINEXFormator::decode(const uint8_t *buf, int size,
             if (sel == 0 && !(eph.code&(1<<9))) valid = false;
             if (sel == 1 && !(eph.code&(1<<8))) valid = false;
           }
+          // eph.sat==0 means the satellite id didn't resolve -- nav.eph is
+          // sized MAXSAT, so an unguarded eph.sat-1 index underflows the
+          // heap allocation (observed as an intermittent, ASLR-sensitive
+          // heap-buffer-overflow segfault).
+          if (eph.sat < 1 || eph.sat > MAXSAT) valid = false;
           if (valid) {
             rnx_.nav.eph[eph.sat-1] = eph;
             rnx_.time = eph.ttr;
