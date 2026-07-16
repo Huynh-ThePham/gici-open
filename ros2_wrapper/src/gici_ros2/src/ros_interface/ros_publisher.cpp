@@ -391,6 +391,12 @@ void publishImu(const rclcpp::PublisherBase::SharedPtr& pub, const DataCluster::
 {
   sensor_msgs::msg::Imu imu_msg;
   imu_msg.header.stamp = toRosTime(imu.time);
+  // This driver does not estimate orientation; per the sensor_msgs/Imu
+  // convention, element 0 of an unavailable field's covariance is set to -1
+  // so consumers know not to use it (as opposed to 0, which means "provided,
+  // covariance unknown" -- the case for linear_acceleration/angular_velocity
+  // below, which ARE populated from real data).
+  imu_msg.orientation_covariance[0] = -1.0;
   imu_msg.linear_acceleration.x = imu.acceleration[0];
   imu_msg.linear_acceleration.y = imu.acceleration[1];
   imu_msg.linear_acceleration.z = imu.acceleration[2];
@@ -405,6 +411,8 @@ void publishImu(const rclcpp::PublisherBase::SharedPtr& pub, const ImuMeasuremen
 {
   sensor_msgs::msg::Imu imu_msg;
   imu_msg.header.stamp = toRosTime(imu.timestamp);
+  // See the DataCluster::IMU overload above for why this is -1, not 0.
+  imu_msg.orientation_covariance[0] = -1.0;
   imu_msg.linear_acceleration.x = imu.linear_acceleration[0];
   imu_msg.linear_acceleration.y = imu.linear_acceleration[1];
   imu_msg.linear_acceleration.z = imu.linear_acceleration[2];
