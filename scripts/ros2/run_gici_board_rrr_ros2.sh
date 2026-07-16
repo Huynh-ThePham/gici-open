@@ -19,6 +19,7 @@ source "${REPO}/scripts/dataset_paths.sh"
 source "${REPO}/scripts/ros2/ros2_bag_replay_common.sh"
 
 MODE="postfile"
+NOSPARSE=0
 FORCE_BAG_REBUILD=0
 FORCE_RECONVERT=0
 POS=()
@@ -26,6 +27,7 @@ for a in "$@"; do
   case "${a}" in
     --postfile) MODE="postfile" ;;
     --bag)      MODE="bag" ;;
+    --nosparsify) NOSPARSE=1 ;;
     --force-rebuild-bags) FORCE_BAG_REBUILD=1 ;;
     --force-reconvert)    FORCE_RECONVERT=1 ;;
     *) POS+=("${a}") ;;
@@ -105,8 +107,13 @@ if [[ "${MODE}" == "postfile" ]]; then
   stop_node "${NODE_PID}"
 else
   BAG_OUT="${OUT_DIR}/rrr_ros2"
-  CFG_SRC="${WS}/src/gici_ros2/config/ros_gici_board_bag_hybrid_rrr.yaml"
-  CFG="${OUT_DIR}/ros_gici_board_bag_hybrid_rrr.yaml"
+  if (( NOSPARSE )); then
+    CFG_SRC="${WS}/src/gici_ros2/config/ros_gici_board_bag_nosparsify_rrr.yaml"
+    CFG="${OUT_DIR}/ros_gici_board_bag_nosparsify_rrr.yaml"
+  else
+    CFG_SRC="${WS}/src/gici_ros2/config/ros_gici_board_bag_hybrid_rrr.yaml"
+    CFG="${OUT_DIR}/ros_gici_board_bag_hybrid_rrr.yaml"
+  fi
 
   if (( FORCE_BAG_REBUILD )); then
     GICI_FORCE_BAG_REBUILD=1 "${REPO}/scripts/ros2/build_gici_board_ros1_bags.sh" "${DATASET_ID}" "${RTCM_START}"
@@ -128,7 +135,7 @@ else
       -e "s#GICI_ROOT#${REPO}#g" \
       -e "s#RTCM_START#${RTCM_START}#g" \
       "${CFG_SRC}" > "${CFG}"
-  echo "[ros2-board] Mode: bag replay (hybrid: rover/ref/imu/cam from bag, eph+DCB from bin)"
+  echo "[ros2-board] Mode: bag replay (hybrid: rover/ref/imu/cam from bag, eph+DCB from bin)${NOSPARSE:+ [nosparsify]}"
   echo "[ros2-board] Dataset: ${DATASET_ID}  rate=${RATE}"
   echo "[ros2-board] ROS2 bag: ${BAG_OUT}"
   echo "[ros2-board] Output:   ${SOLUTION}"

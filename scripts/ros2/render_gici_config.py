@@ -11,7 +11,9 @@ WS = REPO / 'ros2_wrapper' / 'src' / 'gici_ros2' / 'config'
 TEMPLATES = {
     'postfile': WS / 'ros_gici_board_postfile_rrr.yaml',
     'bag': WS / 'ros_gici_board_bag_hybrid_rrr.yaml',
+    'bag-nosparsify': WS / 'ros_gici_board_bag_nosparsify_rrr.yaml',
     'live': WS / 'ros_gici_board_live_rrr.yaml',
+    'live-nosparsify': WS / 'ros_gici_board_live_nosparsify_rrr.yaml',
     'urbannav-live': WS / 'ros_urbannav_live_rrr.yaml',
 }
 

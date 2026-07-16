@@ -31,7 +31,8 @@ else
   APE_POS_MAX="${STRESS_APE_POS_MAX:-0.25}"
   APE_ROT_MAX="${STRESS_APE_ROT_MAX:-999}"
 fi
-# STRESS_RUNNER: bag (run_gici_board_rrr_ros2.sh) | live (launch_gici_live.sh board ... bag)
+# STRESS_VARIANT: default | nosparsify (disable backend sparsify in config)
+STRESS_VARIANT="${STRESS_VARIANT:-}"
 STRESS_RUNNER="${STRESS_RUNNER:-bag}"
 
 if [[ -n "${STRESS_ROOT:-}" ]]; then
@@ -60,22 +61,26 @@ pass_ape=0
 pass_ape_strict=0
 failed_runs=()
 
-printf 'Stress bag replay: dataset=%s runs=%s rate=%s timeout=%ss profile=%s runner=%s\n' \
-  "${DATASET_ID}" "${RUNS}" "${RATE}" "${TIMEOUT_S}" "${STRESS_PROFILE:-strict}" "${STRESS_RUNNER}"
+printf 'Stress bag replay: dataset=%s runs=%s rate=%s timeout=%ss profile=%s runner=%s variant=%s\n' \
+  "${DATASET_ID}" "${RUNS}" "${RATE}" "${TIMEOUT_S}" "${STRESS_PROFILE:-strict}" "${STRESS_RUNNER}" "${STRESS_VARIANT:-default}"
 printf 'APE limits: pos<=%sm rot<=%sdeg  min_gpgga=%s\n' "${APE_POS_MAX}" "${APE_ROT_MAX}" "${MIN_GPGGA}"
 printf 'Output: %s\n\n' "${STRESS_ROOT}"
 
 run_replay() {
   local out_dir="$1"
   if [[ "${STRESS_RUNNER}" == "live" ]]; then
-    env GICI_ROS2_LIVE_OUT="${out_dir}" \
+    local render_mode="${GICI_LIVE_RENDER_MODE:-live}"
+    [[ "${STRESS_VARIANT}" == "nosparsify" ]] && render_mode="live-nosparsify"
+    env GICI_ROS2_LIVE_OUT="${out_dir}" GICI_LIVE_RENDER_MODE="${render_mode}" \
       "${REPO}/scripts/ros2/launch_gici_live.sh" board "${DATASET_ID}" bag "${RATE}"
   else
+    local -a bag_args=(--bag)
+    [[ "${STRESS_VARIANT}" == "nosparsify" ]] && bag_args+=(--nosparsify)
     env GICI_ROS2_BOARD_OUT="${out_dir}" \
-      "${REPO}/scripts/ros2/run_gici_board_rrr_ros2.sh" --bag "${DATASET_ID}" "${RATE}"
+      "${REPO}/scripts/ros2/run_gici_board_rrr_ros2.sh" "${bag_args[@]}" "${DATASET_ID}" "${RATE}"
   fi
 }
-export REPO DATASET_ID RATE STRESS_RUNNER
+export REPO DATASET_ID RATE STRESS_RUNNER STRESS_VARIANT
 export -f run_replay 2>/dev/null || true
 
 for ((i = 1; i <= RUNS; i++)); do

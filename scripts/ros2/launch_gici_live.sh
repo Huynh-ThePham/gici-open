@@ -45,9 +45,10 @@ run_board() {
   local LOG_DIR="${OUT_DIR}/log"
   mkdir -p "${LOG_DIR}"
 
+  local RENDER_MODE="${GICI_LIVE_RENDER_MODE:-live}"
   local CFG="${OUT_DIR}/gici_live.yaml"
   python3 "${REPO}/scripts/ros2/render_gici_config.py" \
-    --mode live \
+    --mode "${RENDER_MODE}" \
     --out "${CFG}" \
     --dataset-dir "${DATASET_DIR}" \
     --output-dir "${OUT_DIR}" \
