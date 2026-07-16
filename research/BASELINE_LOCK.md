@@ -1,13 +1,12 @@
 # Research Baseline Lock
 
-> **Status: PARTIALLY LOCKED** — Algorithm baseline = **file-mode RRR** @ upstream-derived config.
-> GICI core reference: `chichengcn/gici-open` @ `f2b8579`.
-> GICI-board (1.1/3.1/4.1) and UrbanNav Deep are locked and reproducible.
-> **UrbanNav Medium is NOT locked** — open reproducibility bug, see below.
+> **Status: LOCKED** — Algorithm baseline = **file-mode RRR** @ upstream-derived config.
+> GICI core reference: `chichengcn/gici-open` @ `f2b8579` + 4 documented UB bugfixes.
+> GICI-board (1.1/3.1/4.1), UrbanNav Deep, and UrbanNav Medium are all locked and reproducible.
+> Medium still fails the paper-accuracy comparison (known vertical-bias issue) — that's
+> a separate, pre-existing accuracy gap, not a reproducibility problem.
 
 Branch `research/standard-env` = upstream GICI @ `f2b8579` + research wrappers only (`research/`, `scripts/`).
-
-**Sibling branch:** `research/ros2-realtime-fix` = runtime bag replay (tag `realtime-safe-v1`); contains one core mutex patch — keep out of `standard-env`.
 
 See `research/AUTHOR_METHODOLOGY.md`, `research/UPSTREAM_FIDELITY.md`,
 `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md`.
@@ -23,7 +22,7 @@ See `research/AUTHOR_METHODOLOGY.md`, `research/UPSTREAM_FIDELITY.md`,
 | Author repo | `chichengcn/gici-open` |
 | Locked commit | `f2b8579` |
 | Marker commit | `8adde32` |
-| Source delta | **3 files** in `src/` — documented memory-safety/UB bugfixes only, no algorithm/tuning changes; see `research/UPSTREAM_FIDELITY.md` and `scripts/verify_upstream_fidelity.sh` |
+| Source delta | **3 files** in `src/` + **1 file** in vendored `third_party/rtklib/` — documented memory-safety/UB bugfixes only, no algorithm/tuning changes; see `research/UPSTREAM_FIDELITY.md` and `scripts/verify_upstream_fidelity.sh` |
 
 ## UrbanNav file-mode RRR — PRIMARY (algorithm baseline)
 
@@ -47,7 +46,7 @@ python3 scripts/run_urbannav_rrr_baseline.py medium   # default: --config-source
 | Dataset | Author `evo_ape` (full trajectory) | Config | Paper Table V | Status |
 |---------|-------------------------------------|--------|----------------|--------|
 | Deep | **2.141 m / 0.908°** (15,119 epochs, locked 2026-07-15) | `wrapper` | 2.46 m / 1.64° | **LOCKED — PASS** |
-| Medium | **NOT LOCKED** — see below | `wrapper` | 3.40 m / 1.30° | **OPEN BUG** |
+| Medium | **8.042 m / 2.108°** (7,379 epochs, locked 2026-07-16) | `wrapper` | 3.40 m / 1.30° | **LOCKED — fails paper (known issue)** |
 
 Deep re-locked on clean `f2b8579` core + `wrapper` config, full 15,119-epoch trajectory
 (the previous `0.335 m / 0.925°` figure came from a truncated 2,230-epoch partial run and
@@ -60,19 +59,26 @@ python3 scripts/run_urbannav_rrr_baseline.py deep
 ./scripts/run_author_eval_urbannav.sh deep
 ```
 
-### Medium — open reproducibility bug, do not treat any single number as "the" baseline
+### Medium — reproducibility bug fixed 2026-07-16, now locked (but fails paper on accuracy)
 
-Four independent full-trajectory runs (same `wrapper` config, same dataset, same day)
-produced translation RMSE **6.9 m, 7.5 m, 14.1 m, and 16.8 m** respectively (rotation RMSE
-1.85–2.08°, comparatively stable). This is **not** config drift — root-caused to a real,
-ASLR-sensitive memory-safety bug reproduced with a segfault ~3/5 runs at
-`src/stream/data_integration.cpp:325`; see the fix tracked in that file / commit history
-for status. **Do not lock a Medium number until repeated runs agree** (e.g. 5/5 runs within
-tolerance) after the underlying bug is fixed.
+Four full-trajectory runs pre-fix (same `wrapper` config, same dataset, same day) produced
+translation RMSE **6.9 m, 7.5 m, 14.1 m, and 16.8 m** — chaotic and crash-prone (~3/5 runs
+segfaulted). Root-caused to three ASLR-sensitive undefined-behavior bugs, all fixed and
+documented in `research/UPSTREAM_FIDELITY.md`:
+`src/stream/formator.cpp` (heap-buffer-underflow on unresolved satellite ids),
+`src/fusion/gnss_imu_initializer.cpp` (heap-use-after-free on an emptied deque), and
+`third_party/rtklib/src/rinex.c` (uninitialized-memory read, `NUMSYS==7` vs a 6-iteration
+zero-init loop). Post-fix, 3 independent full-trajectory runs cluster within **0.49 m /
+0.20°** of each other (7.74/8.23/8.16 m, 2.00/2.21/2.11°) — reproducibility is fixed.
+
+The converged **~8.0 m** is still well above paper's 3.40 m — that gap is a **separate,
+pre-existing, already-documented issue** (early vertical bias, ~9-12 m, couples into the
+Sim(3) 3D APE — see `research/AUTHOR_METHODOLOGY.md`), not non-determinism. Fixing that is
+a real tuning/algorithm task for a future baseline version, not part of this fix.
 
 ```bash
 python3 scripts/run_urbannav_rrr_baseline.py medium
-./scripts/run_author_eval_urbannav.sh medium   # currently non-reproducible, expect variance
+./scripts/run_author_eval_urbannav.sh medium   # expect ~8.0 m / ~2.1 deg, within tolerance
 ```
 
 ## GICI board datasets — LOCKED (RTK RRR, file-mode + ROS 2)

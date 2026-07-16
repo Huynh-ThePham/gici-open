@@ -7,9 +7,9 @@ start here. ROS 2 ports mirror this config after file-mode validation.
 Do **not** change estimator/calibration in a way that alters locked results
 without cutting a new baseline version.
 
-> **Deep is locked. Medium is NOT** — open reproducibility bug (see "Locked
-> results" below). Do not build Medium-dependent research conclusions on any
-> single number until it's fixed and re-verified.
+> **Deep and Medium are both locked** (see "Locked results" below). Medium still
+> fails the paper-accuracy comparison — a separate, known vertical-bias issue,
+> not a reproducibility problem (fixed 2026-07-16).
 
 ## Baseline identity
 
@@ -116,22 +116,32 @@ Pass criteria: `research/baseline/expected_urbannav_{medium,deep}.json`.
 | Dataset | APE position | APE rotation | Epochs | Config | Lock date | Status |
 | --- | ---: | ---: | ---: | --- | --- | --- |
 | Deep | **2.141 m** | **0.908°** | 15,119 | `wrapper` | 2026-07-15 | **LOCKED — PASS** |
-| Medium | — | — | 7,379 | `wrapper` | — | **NOT LOCKED** |
+| Medium | **8.042 m** | **2.108°** | 7,379 | `wrapper` | 2026-07-16 | **LOCKED — fails paper** |
 
 Deep re-locked on clean `f2b8579` core + wrapper config, full trajectory (the earlier
 `0.335 m / 0.925°` figure was from a truncated 2,230-epoch partial run and has been
 retired). Paper Table V references remain for comparison only.
 
-**Medium is not locked.** Four independent full-trajectory runs of the identical
-`wrapper` config against the identical dataset produced translation RMSE of 6.9 m,
-7.5 m, 14.1 m, and 16.8 m respectively — this is genuine run-to-run non-determinism,
-root-caused to an ASLR-sensitive memory-safety bug reproduced as a ~3/5 segfault rate
-at `src/stream/data_integration.cpp:325` (not config drift, not OpenCV RANSAC, not the
-`bc3761c` mutex fix — that only affects the multi-threaded ROS2 path, not this
-single-threaded post-file path). See `research/BASELINE_LOCK.md` and
-`research/baseline/expected_urbannav_medium.json` for the current status; do not cite
-any single Medium number as "the" baseline until this is fixed and re-verified across
-repeated runs.
+**Medium reproducibility was fixed 2026-07-16.** Four independent full-trajectory runs of
+the identical `wrapper` config against the identical dataset had produced translation RMSE
+of 6.9 m, 7.5 m, 14.1 m, and 16.8 m respectively (~3/5 runs segfaulting) — genuine
+run-to-run non-determinism, root-caused to three ASLR-sensitive undefined-behavior bugs
+(not config drift, not OpenCV RANSAC, not the `bc3761c` mutex fix, which only affects the
+multi-threaded ROS2 path, not this single-threaded post-file path):
+
+- `src/stream/formator.cpp` — `nav.eph[eph.sat-1]`/`nav.geph[prn-1]` indexed without
+  checking `satsys()` actually resolved the satellite; an unresolved id underflows the
+  heap allocation.
+- `src/fusion/gnss_imu_initializer.cpp` — `gnss_solution_measurements_` could be emptied
+  by a loop and then read via `front()`/`back()` unconditionally (heap-use-after-free).
+- `third_party/rtklib/src/rinex.c` — `init_rnxctr()` zeroed only 6 of `NUMSYS=7` signal-index
+  slots, leaving `tobs[6]` as uninitialized memory read by `set_index()`.
+
+All three are documented in `research/UPSTREAM_FIDELITY.md`. Post-fix, 3 independent
+full-trajectory runs cluster within 0.49 m / 0.20° of each other (7.74/8.23/8.16 m,
+2.00/2.21/2.11°) — see `research/baseline/expected_urbannav_medium.json` for the full
+sample. The converged ~8.0 m vs paper's 3.40 m is a **separate**, pre-existing accuracy
+gap (early vertical bias, see `research/AUTHOR_METHODOLOGY.md`), not non-determinism.
 
 ## Operational notes
 

@@ -62,10 +62,14 @@
       },
       "gps_week_day_offset": 86400.0,
       "locked": {
-        "status": "NOT LOCKED -- open reproducibility bug",
+        "status": "LOCKED -- reproducible (3/3 runs), fails paper (known vertical-bias issue)",
         "config_source": "wrapper",
+        "lock_date": "2026-07-16",
+        "ape_translation_rmse_m": 8.0417,
+        "ape_rotation_rmse_deg": 2.108,
         "expected_file": "research/baseline/expected_urbannav_medium.json",
-        "note": "Four full-trajectory (7379-epoch) runs of this exact config+dataset gave ape_translation_rmse_m of 6.9/7.5/14.1/16.8 m (rotation stable ~1.85-2.08 deg). Root cause: ASLR-sensitive memory-safety bug, ~3/5 segfault rate at src/stream/data_integration.cpp:325. The old 3.214458/6.32456 figure below (1490 epochs) was a truncated partial run, retired -- kept only for archaeology.",
+        "solution_gpgga_epochs": 7379,
+        "note": "Mean of 3 post-fix runs (7.7367/8.2291/8.1594 m, 2.003/2.206/2.114 deg -- 0.49m/0.20deg spread). Pre-fix, 4 runs of this exact config+dataset gave 6.9/7.5/14.1/16.8 m (chaotic, ~3/5 segfault rate). Root cause: 3 undefined-behavior bugs (heap-buffer-underflow in formator.cpp, heap-use-after-free in gnss_imu_initializer.cpp, uninitialized read in third_party/rtklib/src/rinex.c) -- see research/UPSTREAM_FIDELITY.md. The old 3.214458/6.32456 figure below (1490 epochs) was a truncated partial run from before any of this was understood, retired -- kept only for archaeology.",
         "retired_truncated_run": {
           "ape_translation_rmse_m": 3.214458,
           "ape_rotation_rmse_deg": 6.32456,
