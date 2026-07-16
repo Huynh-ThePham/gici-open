@@ -59,6 +59,10 @@ protected:
 
   // Shift memory for states and measurements
   inline void shiftMemory() {
+    // Real-time (multi-thread) fix: guard against a concurrent reader (e.g.
+    // getPoseEstimateAt from another thread) iterating states_ while it is
+    // being resized.
+    std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
     states_.push_back(State());
     ambiguity_states_.push_back(AmbiguityState());
     gnss_measurement_pairs_.push_back(
@@ -68,7 +72,7 @@ protected:
       ambiguity_states_.pop_front();
       gnss_measurement_pairs_.pop_front();
     }
-  } 
+  }
 
 protected:
   // Options

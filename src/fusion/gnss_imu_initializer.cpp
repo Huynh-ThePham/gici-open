@@ -115,6 +115,10 @@ bool GnssImuInitializer::addGnssSolutionMeasurement(
     gnss_solution_measurements_.front().timestamp < imu_measurements_.front().timestamp) {
     gnss_solution_measurements_.pop_front();
   }
+  // The loop above can pop every measurement (including the one just pushed
+  // above), leaving the deque empty -- front()/back() below would then read
+  // freed memory (heap-use-after-free).
+  if (gnss_solution_measurements_.empty()) return false;
 
   // Check if we have velocity measurement
   if (measurement.has_velocity) has_any_velocity_measurement_ = true;

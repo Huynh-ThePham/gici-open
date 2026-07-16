@@ -29,6 +29,13 @@ EstimatorBase::~EstimatorBase()
 // Apply ceres optimization
 void EstimatorBase::optimize()
 {
+  // Real-time (multi-thread) fix: graph_->solve() overwrites the parameter
+  // block values that getPoseEstimate/getSpeedAndBiasEstimate/getCovariance
+  // read from another thread (e.g. the image-frontend thread); guard the
+  // whole solve + covariance update so a reader never observes a torn,
+  // partially-updated graph.
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+
   graph_->options.linear_solver_type = base_options_.solver_type;
   graph_->options.trust_region_strategy_type = base_options_.trust_region_strategy_type;
   graph_->options.num_threads = base_options_.num_threads;
@@ -116,6 +123,7 @@ bool EstimatorBase::applyMarginalization()
 // Get pose
 Transformation EstimatorBase::getPoseEstimate()
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   State& state = getLast(states_);
   if (!graph_->parameterBlockExists(state.id_in_graph.asInteger())) {
     return Transformation();
@@ -127,6 +135,7 @@ Transformation EstimatorBase::getPoseEstimate()
 bool EstimatorBase::getPoseEstimateAt(
   const double timestamp, Transformation& T_WS)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   for (size_t i = 0; i < states_.size() - 1; i++) {
     if (checkEqual(timestamp, states_[i].timestamp)) {
       T_WS = getPoseEstimate(states_[i]);
@@ -139,6 +148,7 @@ bool EstimatorBase::getPoseEstimateAt(
 // Get latest speed and bias
 SpeedAndBias EstimatorBase::getSpeedAndBiasEstimate()
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   State& state = getLast(states_);
   if (!graph_->parameterBlockExists(state.id_in_graph.asInteger())) {
     return SpeedAndBias::Zero();
@@ -150,6 +160,7 @@ SpeedAndBias EstimatorBase::getSpeedAndBiasEstimate()
 bool EstimatorBase::getSpeedAndBiasEstimateAt(
   const double timestamp, SpeedAndBias& speed_and_bias)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   for (size_t i = 0; i < states_.size() - 1; i++) {
     if (checkEqual(timestamp, states_[i].timestamp)) {
       speed_and_bias = getSpeedAndBiasEstimate(states_[i]);
@@ -159,9 +170,10 @@ bool EstimatorBase::getSpeedAndBiasEstimateAt(
   return false;
 }
 
-// Get latest minimal covariance 
+// Get latest minimal covariance
 Eigen::Matrix<double, 15, 15> EstimatorBase::getCovariance()
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   State& state = getLast(states_);
   if (!graph_->parameterBlockExists(state.id_in_graph.asInteger())) {
     return Eigen::Matrix<double, 15, 15>::Zero();
@@ -174,6 +186,7 @@ Eigen::Matrix<double, 15, 15> EstimatorBase::getCovariance()
 bool EstimatorBase::getCovarianceAt(
   const double timestamp, Eigen::Matrix<double, 15, 15>& covariance)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   for (size_t i = 0; i < states_.size() - 1; i++) {
     if (checkEqual(timestamp, states_[i].timestamp)) {
       covariance = getCovariance(states_[i]);
@@ -186,6 +199,7 @@ bool EstimatorBase::getCovarianceAt(
 // Get pose estimate at a given state
 Transformation EstimatorBase::getPoseEstimate(const State& state)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   BackendId id = state.id_in_graph;
   if (!graph_->parameterBlockExists(id.asInteger())) {
     LOG(ERROR) << "Parameter block with id " << id << " does not exist!";
@@ -227,6 +241,7 @@ Transformation EstimatorBase::getPoseEstimate(const State& state)
 // Get latest speed and bias at a given state
 SpeedAndBias EstimatorBase::getSpeedAndBiasEstimate(const State& state)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   BackendId id = state.id_in_graph;
   if (!graph_->parameterBlockExists(id.asInteger())) {
     LOG(ERROR) << "Parameter block with id " << id << " does not exist!";
@@ -278,6 +293,7 @@ SpeedAndBias EstimatorBase::getSpeedAndBiasEstimate(const State& state)
 // Get minimal covariance at a given state
 Eigen::Matrix<double, 15, 15> EstimatorBase::getCovariance(const State& state)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   base_options_.compute_covariance = true;
 
   const double timestamp = state.timestamp;
@@ -382,6 +398,7 @@ Eigen::Matrix<double, 15, 15> EstimatorBase::computeAndGetCovariance(const State
 // Update covariance storage
 void EstimatorBase::updateCovariance(const State& state)
 {
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
   // erase old covariances
   const double oldest_timestamp = oldestState().timestamp;
   for (auto it = covariances_.begin(); it != covariances_.end();) {

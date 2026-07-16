@@ -22,13 +22,13 @@ RosNodeHandle::RosNodeHandle(rclcpp::Node::SharedPtr node, const NodeOptionHandl
     int n_io = nodes->streamers[i]->input_tags.size() +
                nodes->streamers[i]->output_tags.size();
     if (n_io == 0) {
-      LOG(ERROR) << nodes->streamers[i]->tag << ": "
-        << "At least one I/O port should be specified for a ROS stream!";
+      RCLCPP_ERROR(node->get_logger(), "%s: At least one I/O port should be "
+        "specified for a ROS stream!", nodes->streamers[i]->tag.c_str());
       continue;
     }
     if (n_io > 1) {
-      LOG(ERROR) << nodes->streamers[i]->tag << ": "
-        << "A ROS stream should has only one I/O port.";
+      RCLCPP_ERROR(node->get_logger(), "%s: A ROS stream should has only one "
+        "I/O port.", nodes->streamers[i]->tag.c_str());
       continue;
     }
 

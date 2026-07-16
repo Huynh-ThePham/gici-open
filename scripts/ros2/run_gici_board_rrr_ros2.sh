@@ -185,22 +185,44 @@ else
       > "${OUT_DIR}/log/play.log" 2>&1 &
     PLAYER_PID=$!
 
+    NODE_DIED_MIDPLAY=0
     while process_alive_non_zombie "${PLAYER_PID}"; do
-      process_alive_non_zombie "${NODE_PID}" || break
+      if ! process_alive_non_zombie "${NODE_PID}"; then
+        NODE_DIED_MIDPLAY=1
+        break
+      fi
       sleep 1
     done
     wait "${PLAYER_PID}" 2>/dev/null || true
+
+    if (( NODE_DIED_MIDPLAY )); then
+      # Node is already gone; `wait` just reaps it and reports how (exit code, or
+      # 128+signal if killed -- e.g. 137 == SIGKILL, consistent with an OOM kill).
+      NODE_WAIT_STATUS=0
+      wait "${NODE_PID}" 2>/dev/null || NODE_WAIT_STATUS=$?
+      echo "[ros2-board] WARNING: node died mid-replay (wait status=${NODE_WAIT_STATUS}, likely signal $((NODE_WAIT_STATUS - 128)) if >128)" \
+        | tee -a "${REPLAY_LOG}"
+    fi
 
     drain_solution_epochs "${SOLUTION}" "${NODE_PID}" "${MIN_EPOCHS}"
     stop_gici_node "${NODE_PID}"
 
     EPOCHS="$(count_gpgga "${SOLUTION}")"
-    echo "[ros2-board] attempt ${attempt}: GPGGA epochs=${EPOCHS}" >>"${REPLAY_LOG}"
-    if (( EPOCHS > 0 )); then
+    echo "[ros2-board] attempt ${attempt}: GPGGA epochs=${EPOCHS} node_died_midplay=${NODE_DIED_MIDPLAY}" >>"${REPLAY_LOG}"
+    # A node that dies before the bag finishes playing produces a truncated
+    # trajectory even when EPOCHS > 0 -- that must not be treated as success
+    # (this previously slipped through as a "complete" run with partial GPGGA
+    # output, e.g. 657/1785 epochs, which stress tooling then couldn't tell
+    # apart from a genuinely full replay).
+    if (( EPOCHS > 0 )) && (( NODE_DIED_MIDPLAY == 0 )); then
       ATTEMPT_OK=1
       break
     fi
-    echo "[ros2-board] empty solution on attempt ${attempt}" | tee -a "${REPLAY_LOG}"
+    if (( NODE_DIED_MIDPLAY )); then
+      echo "[ros2-board] node died mid-replay on attempt ${attempt} (epochs=${EPOCHS}); treating as failed attempt" | tee -a "${REPLAY_LOG}"
+    else
+      echo "[ros2-board] empty solution on attempt ${attempt}" | tee -a "${REPLAY_LOG}"
+    fi
     cleanup_ros2_gici_session "${CLEANUP_LOG}"
   done
 

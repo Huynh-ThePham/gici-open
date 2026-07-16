@@ -280,19 +280,26 @@ bool GnssImuCameraSrrEstimator::estimate()
   // Apply marginalization
   marginalization(new_state_type);
 
-  // Shift memory for states and measurements
-  if (new_state_type == IdType::gPose) 
-    gnss_solution_measurements_.push_back(GnssSolution());
-  if (new_state_type == IdType::cPose) frame_bundles_.push_back(nullptr);
-  states_.push_back(State());
-  while (!visual_initialized_ && 
-         states_.size() > srr_options_.max_gnss_window_length_minor) {
-    states_.pop_front();
+  // Shift memory for states and measurements.
+  // Real-time (multi-thread) fix: guard the states_ push/pop with
+  // estimator_state_mutex_ so the image-frontend thread's getPoseEstimateAt()
+  // (which holds the same mutex) never iterates states_ while the backend is
+  // mutating it.
+  {
+    std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+    if (new_state_type == IdType::gPose)
+      gnss_solution_measurements_.push_back(GnssSolution());
+    if (new_state_type == IdType::cPose) frame_bundles_.push_back(nullptr);
+    states_.push_back(State());
+    while (!visual_initialized_ &&
+           states_.size() > srr_options_.max_gnss_window_length_minor) {
+      states_.pop_front();
+    }
+    // only keep measurement data for two epochs
+    while (gnss_solution_measurements_.size() > 2)
+      gnss_solution_measurements_.pop_front();
+    while (frame_bundles_.size() > 2) frame_bundles_.pop_front();
   }
-  // only keep measurement data for two epochs
-  while (gnss_solution_measurements_.size() > 2) 
-    gnss_solution_measurements_.pop_front();
-  while (frame_bundles_.size() > 2) frame_bundles_.pop_front();
 
   return true;
 }
@@ -307,12 +314,18 @@ void GnssImuCameraSrrEstimator::setInitializationResult(
   std::shared_ptr<GnssImuInitializer> gnss_imu_initializer = 
     std::static_pointer_cast<GnssImuInitializer>(initializer);
   CHECK_NOTNULL(gnss_imu_initializer);
-  
+
+  // Real-time (multi-thread) fix: the image-frontend thread reads states_ and
+  // imu_measurements_ via getPoseEstimateAt() under estimator_state_mutex_.
+  // Guard the whole init-result transfer with the same mutex so the frontend
+  // never observes a half-populated estimator.
+  std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+
   // Arrange to window length
   ImuMeasurements imu_measurements;
   gnss_imu_initializer->arrangeToEstimator(
-    srr_options_.max_gnss_window_length_minor, marginalization_error_, states_, 
-    marginalization_residual_id_, gnss_extrinsics_id_, 
+    srr_options_.max_gnss_window_length_minor, marginalization_error_, states_,
+    marginalization_residual_id_, gnss_extrinsics_id_,
     gnss_solution_measurements_, imu_measurements);
   for (auto it = imu_measurements.rbegin(); it != imu_measurements.rend(); it++) {
     imu_mutex_.lock();

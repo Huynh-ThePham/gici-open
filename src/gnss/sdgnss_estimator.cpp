@@ -158,9 +158,15 @@ bool SdgnssEstimator::estimate()
       << ", Sat number: " << std::setw(2) << num_satellites_;
   }
 
-  // Shift memory
-  states_.push_back(State());
-  while (states_.size() > 2) states_.pop_front();
+  // Shift memory. Real-time (multi-thread) fix: guard against a concurrent
+  // reader (e.g. getPoseEstimateAt from another thread) iterating states_
+  // while it is being resized -- same class of race as the IMU estimators'
+  // states_ shift (see rtk_imu_camera_rrr_estimator.cpp).
+  {
+    std::lock_guard<std::recursive_mutex> lock(estimator_state_mutex_);
+    states_.push_back(State());
+    while (states_.size() > 2) states_.pop_front();
+  }
 
   return true;
 }

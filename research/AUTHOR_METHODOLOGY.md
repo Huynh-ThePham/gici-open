@@ -84,22 +84,62 @@ Research wrapper: `research/config/rtk_imu_camera_rrr_urbannav.yaml`.
 
 | Dataset | Rover obs | Base (author) | Ephemeris |
 |---------|-----------|---------------|-----------|
-| Medium | `UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs` | `hkkt137g.rnx` | `brdc1370.rnx` |
+| Medium | `UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs` | **`_deprecated/_official_probe/HKKT137_h02_01S_MO.rnx`** (1 s session) | `brdc1370.rnx` |
 | Deep | `UrbanNav-HK-Deep-Urban-1.ublox.f9p.splitter.obs` | **`hkkt141g.21o`** (5 s session) | `brdc_mn.rnx` |
 
-Deep with full-day `hkkt141g.rnx` → ~13 m horizontal error (wrong base session).
+Both datasets need a **session-aligned, high-rate** base — the full-day, 30 s files
+(`hkkt137g.rnx` for Medium, `hkkt141g.rnx` for Deep) are both too sparse for RTK
+double-differencing and were retired: Deep with full-day `hkkt141g.rnx` → ~13 m
+horizontal error; Medium with full-day `hkkt137g.rnx` → ~13 m mean **vertical** bias
+(see "Known UrbanNav eval gaps" below — root-caused 2026-07-16, four days after the
+Deep fix was first documented, since the same fix was never propagated to Medium).
 
-## Known UrbanNav eval gaps vs paper Table V
+## Known UrbanNav eval gaps vs paper Table V — historical (fixed 2026-07-16)
 
-| Dataset | Author `evo_ape` pos / rot | Paper Table V | `rmse_h` smoke |
+This section is retained for archaeology; both gaps below are now closed — see
+`research/BASELINE_LOCK.md` for current locked numbers.
+
+| Dataset | Author `evo_ape` pos / rot (old, full-day base) | Paper Table V | `rmse_h` smoke |
 |---------|---------------------------|---------------|----------------|
-| Medium | 4.55 m / 2.06° | 3.40 m / 1.30° | **3.28 m** ≈ paper pos |
+| Medium | 8.04 m / 2.11° (also 4.55 m / 2.06° on an earlier partial run) | 3.40 m / 1.30° | **3.02 m** ≈ paper pos |
 | Deep | 2.12 m / 0.95° | 2.46 m / 1.64° | **2.47 m** ≈ paper pos |
 
-Medium 3D APE inflation: ~9 m mean vertical bias between solution GPGGA ellipsoid height and TST `H-Ell` (`rmse_u ≈ 10 m`). Sim(3) couples vertical error into translation APE. Deep has low vertical error; author `evo_ape` aligns with paper.
+Medium 3D APE inflation (diagnosed via `scripts/diagnose_urbannav_medium_eval.py`): ~13 m
+mean vertical bias between solution GPGGA ellipsoid height and TST `H-Ell`
+(`rmse_u ≈ 15 m`). Sim(3) couples vertical error into translation APE. Deep has low
+vertical error (`rmse_u ≈ 1.9 m`); author `evo_ape` aligns with paper.
 
-`scripts/diagnose_urbannav_medium_eval.py` documents this; it does **not** define pass/fail.
+**Root cause and fix (2026-07-16):** RTK float/fixed rate was ruled out first — Deep is
+*also* ~99% float (`fixed_rate ≈ 0.009`) yet has 8x lower vertical RMSE than Medium, so
+ambiguity resolution status doesn't explain the gap. The actual cause: Medium's base
+RINEX (`hkkt137g.rnx`) is sampled every 30 s over the full day — too sparse for RTK
+double-differencing to interpolate the base epoch accurately at the rover's update rate.
+This is the *same class* of bug already fixed for Deep (full-day 30 s → session-aligned
+5 s), just never applied to Medium. Fix: switched Medium to a session-aligned **1 s**
+base (`HKKT137_h02_01S_MO.rnx`, identical RINEX 3.02 format/obs-types as the retired
+file, covering GPS time 02:00-02:59 which brackets the rover's 02:33-02:46 window).
+
+Post-fix diagnostics (3 independent full-trajectory runs):
+
+| Metric | Before (30 s base) | After (1 s base) |
+|--------|--------------------|--------------------|
+| `tst_rmse_u_m` | 15.05 | 4.23 |
+| `tst_u_bias_mean_m` | 13.02 | 2.12 |
+| `evo_ape` translation RMSE | 8.042 m | 2.717 m (mean of 3.626/2.179/2.347) |
+| `evo_ape` rotation RMSE | 2.108° | 1.182° (mean of 1.254/1.091/1.200) |
+| vs paper (3.40 m / 1.30°) | fail | **pass** |
+
+Run-to-run spread on the new base (1.45 m / 0.16°) is wider than the old config's
+(0.49 m / 0.20°) — likely the same Ceres `num_threads=4` floating-point
+non-associativity noted elsewhere in this doc, now more visible since the dominant
+systematic vertical bias is gone. See `research/baseline/expected_urbannav_medium.json`
+for the full sample.
+
+`scripts/diagnose_urbannav_medium_eval.py` documents the vertical-bias diagnosis; it does
+**not** define pass/fail — see `research/baseline/expected_urbannav_medium.json` for that.
 
 ## Upstream fidelity
 
-**Zero source delta** from `f2b8579` — see `research/UPSTREAM_FIDELITY.md` and `./scripts/verify_upstream_fidelity.sh`.
+Source delta from `f2b8579` is **4 documented memory-safety/UB bugfixes only** (no
+algorithm/tuning changes) — see `research/UPSTREAM_FIDELITY.md` and
+`./scripts/verify_upstream_fidelity.sh`.

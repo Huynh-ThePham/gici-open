@@ -105,7 +105,10 @@ rot_rmse = parse_rmse(eval_dir / "ape_rotation.txt")
 expected = json.loads(expected_path.read_text()) if expected_path.is_file() else {}
 paper = expected.get("paper_reference", {})
 paper_tol = expected.get("paper_tolerance", {"ape_translation_rmse_m": 0.35, "ape_rotation_rmse_deg": 0.35})
-locked = expected.get("locked_reproduce_2026_07_11")
+# Locked-reference key is date-stamped (e.g. locked_reproduce_2026_07_11); take
+# whichever one is present rather than hardcoding a single dataset's lock date.
+locked_key = next((k for k in expected if k.startswith("locked_reproduce_")), None)
+locked = expected.get(locked_key) if locked_key else None
 tol = expected.get("tolerance", {"ape_translation_rmse_m": 0.05, "ape_rotation_rmse_deg": 0.15})
 
 metrics = {
@@ -116,10 +119,10 @@ metrics = {
     "ape_translation_rmse_m": pos_rmse,
     "ape_rotation_rmse_deg": rot_rmse,
     "paper_reference": paper,
-    "locked_reference": locked if dataset_id == "1.1" else None,
+    "locked_reference": locked,
     "pass": False,
 }
-if dataset_id == "1.1" and locked:
+if locked:
     metrics["pass"] = (
         abs(pos_rmse - locked["ape_translation_rmse_m"]) <= tol["ape_translation_rmse_m"]
         and abs(rot_rmse - locked["ape_rotation_rmse_deg"]) <= tol["ape_rotation_rmse_deg"]
@@ -139,7 +142,7 @@ print("=" * 60)
 print(f"  GPGGA epochs      : {metrics['solution_gpgga_epochs']}")
 print(f"  APE position RMSE : {pos_rmse:.4f} m")
 print(f"  APE rotation RMSE : {rot_rmse:.3f} deg")
-if dataset_id == "1.1" and locked:
+if locked:
     print(f"  Locked reference  : {locked['ape_translation_rmse_m']:.4f} m / {locked['ape_rotation_rmse_deg']:.3f} deg")
     print(f"  PASS vs locked    : {metrics['pass']}")
 if paper:

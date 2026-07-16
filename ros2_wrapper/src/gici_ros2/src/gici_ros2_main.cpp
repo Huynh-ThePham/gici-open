@@ -54,9 +54,12 @@ int main(int argc, char** argv)
     config_file_path = node->get_parameter("config_file").as_string();
   }
   if (config_file_path.empty()) {
-    std::cerr << "Invalid input! Provide config as:\n"
-              << "  gici_ros2_main <path-to-config>\n"
-              << "  or ROS param config_file via launch / --params-file" << std::endl;
+    // node already exists at this point (unlike the pre-merge ros2-realtime-fix
+    // version, where this check ran before Node creation and had to use a named
+    // logger), so this can log through the node's own logger.
+    RCLCPP_ERROR(node->get_logger(),
+      "Invalid input! Provide config as: gici_ros2_main <path-to-config>, "
+      "or ROS param config_file via launch / --params-file");
     rclcpp::shutdown();
     return -1;
   }
@@ -67,7 +70,7 @@ int main(int argc, char** argv)
   try {
      yaml_node = YAML::LoadFile(config_file_path);
   } catch (YAML::BadFile &e) {
-    std::cerr << "Unable to load config file!" << std::endl;
+    RCLCPP_ERROR(node->get_logger(), "Unable to load config file!");
     rclcpp::shutdown();
     return -1;
   }
@@ -97,28 +100,29 @@ int main(int argc, char** argv)
   NodeOptionHandlePtr node_option_handle =
     std::make_shared<NodeOptionHandle>(yaml_node);
   if (!node_option_handle->valid) {
-    std::cerr << "Invalid configurations!" << std::endl;
+    RCLCPP_ERROR(node->get_logger(), "Invalid configurations!");
     rclcpp::shutdown();
     return -1;
   }
-
-  // Create the ROS 2 node
-  // (node already created above for config_file param)
 
   // Initialize nodes
   std::unique_ptr<RosNodeHandle> node_handle =
     std::make_unique<RosNodeHandle>(node, node_option_handle);
 
-  // Show information
+  // Show information. Logged via RCLCPP_INFO (not std::cout) so it appears on
+  // /rosout and respects ros2 launch log-level filtering; the substring
+  // "Initialized N streamers...Running" is still what
+  // scripts/ros2/ros2_bag_replay_common.sh greps for readiness, and grep -E
+  // is not anchored so the RCLCPP_INFO log prefix does not break that check.
   const std::vector<size_t> sizes = {
     node_option_handle->streamers.size(),
     node_option_handle->formators.size(),
     node_option_handle->estimators.size()};
-  std::cout << "Initialized "
-    << sizes[0] << " streamer" << (sizes[0] > 1 ? "s" : "") << ", "
-    << sizes[1] << " formater" << (sizes[1] > 1 ? "s" : "") << ", and "
-    << sizes[2] << " estimator" << (sizes[2] > 1 ? "s" : "") << ". "
-    << "Running..." << std::endl;
+  RCLCPP_INFO(node->get_logger(),
+    "Initialized %zu streamer%s, %zu formater%s, and %zu estimator%s. Running...",
+    sizes[0], sizes[0] > 1 ? "s" : "",
+    sizes[1], sizes[1] > 1 ? "s" : "",
+    sizes[2], sizes[2] > 1 ? "s" : "");
 
   // Start running all threads
   SpinControl::run();
