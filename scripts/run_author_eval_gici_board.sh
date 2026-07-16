@@ -142,7 +142,7 @@ print("=" * 60)
 print(f"  GPGGA epochs      : {metrics['solution_gpgga_epochs']}")
 print(f"  APE position RMSE : {pos_rmse:.4f} m")
 print(f"  APE rotation RMSE : {rot_rmse:.3f} deg")
-if dataset_id == "1.1" and locked:
+if locked:
     print(f"  Locked reference  : {locked['ape_translation_rmse_m']:.4f} m / {locked['ape_rotation_rmse_deg']:.3f} deg")
     print(f"  PASS vs locked    : {metrics['pass']}")
 if paper:
