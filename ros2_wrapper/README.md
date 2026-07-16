@@ -160,6 +160,66 @@ and aborts.
   **continuously for the whole session** (e.g. 319 epochs in a 70 s window, 0 crashes),
   after the frequency-slot fix described below.
 
+## ROS2-standard-practice audit (2026-07-16) — fixed vs. remaining
+
+A multi-agent audit compared this wrapper against standard ROS2 (Humble) conventions
+across build/packaging, node/threading design, messaging/QoS, launch/parameters,
+time/replay determinism, and logging/diagnostics/testing. **Fixed** (see git log on
+`research/ros2-realtime-fix` for the individual commits):
+
+- **Real-time race conditions** (the important one — a correctness bug, not a style
+  issue): the original `imu_state_mutex_` guard (commit `bc3761c`) only covered the
+  `states_` push/pop in one estimator. Promoted the mutex to `EstimatorBase`
+  (`estimator_state_mutex_`, recursive) and extended it to cover the `last_*` cache,
+  the `covariances_` map, `graph_->solve()` vs. concurrent reads, and every other
+  multi-threaded estimator's `states_` shift. See `research/UPSTREAM_FIDELITY.md`.
+- Logging: `gici_ros2_main.cpp`/`ros_node_handle.cpp`/`ros_stream.cpp` now log via
+  `RCLCPP_INFO`/`RCLCPP_ERROR` (visible on `/rosout`, respects `ros2 launch` log-level
+  filtering) instead of glog/`std::cout`/`std::cerr`.
+- `CMakeLists.txt`'s `GICI_ROOT` (vendored core location) is now validated with an
+  actionable error message and overridable via `-DGICI_ROOT=` / `GICI_CORE_ROOT`,
+  instead of a bare, unchecked `../../..` assumption.
+- `frame_id` (world-fixed parent frame for odometry/pose_stamped/marker/path output)
+  is now configurable via a `frame_id:` key and defaults to `map` (REP 105), not the
+  hardcoded, non-REP-105 `"World"`.
+- Republished IMU messages set `orientation_covariance[0] = -1` (this driver doesn't
+  estimate orientation) instead of leaving it at a misleading `0.0`.
+
+**Remaining, documented but not fixed here** — lower risk/value or needs its own
+testing pass, tracked as follow-up work rather than rushed in:
+
+- **QoS defaults are `reliable + keep_all`** for every input, including high-rate
+  IMU/camera (see "Lossless QoS" above) — correct for this wrapper's own bag-replay/
+  republish tooling, but a **live** sensor driver publishing `SensorDataQoS`
+  (best-effort, the ROS2 norm for IMU/camera) will silently fail to connect (DDS
+  Reliable-subscriber vs. Best-Effort-publisher is an incompatible match — no error,
+  just zero messages). Per-topic override already exists (`qos: { reliability:
+  best_effort, ... }` on the streamer's YAML block) — use it for a live sensor input;
+  it is not enabled by default because that would reintroduce drops for the
+  bag-replay path this wrapper is actually verified against.
+- **Output is file-only in every shipped config.** `RosStream` fully implements
+  `format: odometry`/`pose_stamped`/`path`/`marker` with tf2 broadcasting, but no RRR
+  config wires an output streamer to them (only `type: file` NMEA) — so nothing is
+  rviz2-visualizable out of the box. Wire one of these `format:` blocks in your own
+  config (see the commented examples in `config/ros_urbannav.yaml`) if you need live
+  visualization.
+- **`ros2 launch`/`ros2 run` are bypassed everywhere** in favor of directly exec'ing
+  the compiled binary from bash + manual `kill -INT`, because `ros2 run` does not
+  forward `SIGINT` to a backgrounded child (see "Clean shutdown" above). This is a
+  real, verified constraint, not an oversight — but it does mean no
+  `declare_parameter()`/`ros2 param`/launch-file parameter substitution is used
+  anywhere; config is a single positional YAML path. Revisiting this would need to
+  first confirm `ros2 launch` doesn't have the same signal-forwarding gap before
+  switching.
+- **No `diagnostic_msgs`/DiagnosticArray publishing** for health/status (GNSS
+  reference-station errors, estimator divergence) — currently only visible by
+  grepping the node's log (see `scripts/ros2/ros2_bag_replay_common.sh`'s health
+  check). Would need new plumbing from the core estimator's internal status up
+  through the ROS layer.
+- **No `colcon test`-visible tests** (`ament_add_gtest`/`launch_testing`) — all
+  verification currently goes through the bash scripts in `scripts/ros2/`, which
+  `colcon test` cannot see or report on.
+
 ## How the original author actually runs UrbanNav (use this for full results)
 
 The GICI authors do **not** run UrbanNav through ROS. They run it in **post-processing
