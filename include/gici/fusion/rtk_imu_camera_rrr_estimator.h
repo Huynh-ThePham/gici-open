@@ -31,6 +31,15 @@ struct RtkImuCameraRrrEstimatorOptions {
 
   // Maximum yaw STD to start visual initialization (deg)
   double min_yaw_std_init_visual = 0.5;
+
+  // Vision-aided ambiguity resolution research (research/vision-aided-ambiguity-
+  // resolution branch): when true, additionally computes the ambiguity covariance
+  // directly from the real joint graph (paired with the current epoch's pose/IMU
+  // state, not the full sliding window) and logs a timing comparison against the
+  // existing GNSS-only shadow-estimator path. Purely diagnostic -- does not affect
+  // the AR decision or any estimator output. Default off so existing locked
+  // baselines are unaffected.
+  bool benchmark_joint_ambiguity_covariance = false;
 };
 
 // Estimator
@@ -89,6 +98,12 @@ protected:
 
   // Compute ambiguity covariance at current epoch
   bool estimateAmbiguityCovariance(const State& state, Eigen::MatrixXd& covariance);
+
+  // Research diagnostic (see benchmark_joint_ambiguity_covariance option above):
+  // times computing the ambiguity covariance directly from the real joint graph_
+  // (ambiguity blocks + current epoch's pose/IMU block only, not the full window)
+  // and logs it against the existing shadow-estimator path's timing.
+  void benchmarkJointAmbiguityCovariance(const State& state);
   
   // Get latest state
   inline State& latestState() override { return states_[latest_state_index_]; }

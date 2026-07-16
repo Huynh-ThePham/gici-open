@@ -8,6 +8,9 @@
 **/
 #include "gici/fusion/rtk_imu_camera_rrr_estimator.h"
 
+#include <chrono>
+#include <iomanip>
+
 #include "gici/gnss/position_error.h"
 
 namespace gici {
@@ -396,6 +399,9 @@ bool RtkImuCameraRrrEstimator::estimate()
             states_[i].status = GnssSolutionStatus::Fixed;
           }
         }
+      }
+      if (rrr_options_.benchmark_joint_ambiguity_covariance) {
+        benchmarkJointAmbiguityCovariance(states_[latest_state_index_]);
       }
     }
 
@@ -786,6 +792,62 @@ bool RtkImuCameraRrrEstimator::estimateAmbiguityCovariance(
   sub_graph->computeCovariance(parameter_block_ids, covariance);
 
   return true;
+}
+
+// Research diagnostic: see RtkImuCameraRrrEstimatorOptions::benchmark_joint_ambiguity_covariance.
+void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& state)
+{
+  namespace chrono = std::chrono;
+
+  // Ambiguity parameter block ids (same set used by the existing shadow-estimator path).
+  std::vector<uint64_t> parameter_block_ids;
+  for (auto id : curAmbiguityState().ids) {
+    if (!graph_->parameterBlockExists(id.asInteger())) return;
+    parameter_block_ids.push_back(id.asInteger());
+  }
+  if (parameter_block_ids.empty()) return;
+  const size_t num_ambiguity_blocks = parameter_block_ids.size();
+
+  // Current epoch's pose block (position/attitude, tightly coupled with IMU) plus its
+  // IMU speed-and-bias companion block, if resolvable -- this is the "current-epoch-only"
+  // cross-covariance scope proposed in research/VISION_AIDED_AR.md, as opposed to the full
+  // sliding window (all keyframes/landmarks/historical ambiguities) that the original
+  // authors judged too expensive.
+  size_t num_pose_blocks = 0;
+  if (graph_->parameterBlockExists(state.id_in_graph.asInteger())) {
+    parameter_block_ids.push_back(state.id_in_graph.asInteger());
+    num_pose_blocks++;
+    BackendId speed_and_bias_id = changeIdType(state.id_in_graph, IdType::ImuStates);
+    if (graph_->parameterBlockExists(speed_and_bias_id.asInteger())) {
+      parameter_block_ids.push_back(speed_and_bias_id.asInteger());
+      num_pose_blocks++;
+    }
+  }
+
+  // Time: joint-graph covariance query (ambiguities + current pose/speed-bias only).
+  Eigen::MatrixXd joint_covariance;
+  auto t0 = chrono::steady_clock::now();
+  bool joint_ok = graph_->computeCovariance(parameter_block_ids, joint_covariance);
+  auto t1 = chrono::steady_clock::now();
+  double joint_ms = chrono::duration<double, std::milli>(t1 - t0).count();
+
+  // Time: the existing shadow-estimator path, for direct comparison (recomputed here
+  // purely for benchmarking; estimateAmbiguityCovariance() above already did this once
+  // this epoch for the real AR decision -- this second call is diagnostic-only overhead,
+  // gated behind benchmark_joint_ambiguity_covariance, and does not affect AR).
+  Eigen::MatrixXd shadow_covariance;
+  auto t2 = chrono::steady_clock::now();
+  bool shadow_ok = estimateAmbiguityCovariance(state, shadow_covariance);
+  auto t3 = chrono::steady_clock::now();
+  double shadow_ms = chrono::duration<double, std::milli>(t3 - t2).count();
+
+  LOG(INFO) << "[vaar-benchmark] t=" << std::fixed << std::setprecision(3) << state.timestamp
+    << " joint_ok=" << joint_ok << " joint_ms=" << joint_ms
+    << " num_ambiguity_blocks=" << num_ambiguity_blocks
+    << " num_pose_blocks=" << num_pose_blocks
+    << " graph_num_parameter_blocks=" << graph_->parameters().size()
+    << " graph_num_residual_blocks=" << graph_->residuals().size()
+    << " shadow_ok=" << shadow_ok << " shadow_ms=" << shadow_ms;
 }
 
 };

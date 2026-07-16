@@ -83,12 +83,48 @@ use, and chose a decoupled workaround instead of a partial one.
 
 **This reframes the contribution precisely:** not "add cross-covariance nobody
 thought of," but "find a computationally tractable middle ground the original authors
-didn't take" — e.g. querying `graph_->computeCovariance()` for the ambiguity IDs
-*plus only the current epoch's pose/velocity block* (not the full window), which
-should be far cheaper than what the authors deemed infeasible while still capturing
-the dominant cross-correlation (most of it should come from the current-epoch
-coupling, not distant historical states). Natural minimal-change entry point:
-`rtk_imu_camera_rrr_estimator.cpp:387`, replacing the call into the shadow estimator.
+didn't take."
+
+### Cost measurement result (2026-07-17) — the naive approach is confirmed infeasible
+
+Instrumented `rtk_imu_camera_rrr_estimator.cpp` (option `benchmark_joint_ambiguity_covariance`,
+default off) to time `graph_->computeCovariance()` for the ambiguity IDs *plus only the
+current epoch's pose/speed-and-bias block* (not the full window) against the existing
+shadow-estimator path, on UrbanNav Medium (100% float — 641 logged epochs, full
+trajectory):
+
+| Graph size (parameter blocks) | Joint-graph query (mean / max) | Shadow estimator (mean) |
+|---|---|---|
+| < 100 (early, window still filling) | 1.0 ms / 1.6 ms | 0.2 ms |
+| 200-400 (steady state — most of the run) | 500-2000+ ms (max 2.28 **s**) | 0.2-0.7 ms |
+| **Overall** | mean 687 ms, median 653 ms, **86.4% of epochs > 50 ms** | mean 0.39 ms |
+
+The cost does not scale with the *number of blocks requested* (always ambiguities +
+2 blocks) — it scales with the graph's *total* size, confirming this is dominated by
+Ceres's covariance algorithm needing to factor structure tied to the whole problem,
+not by how many blocks are ultimately extracted. **The naive "just query the joint
+graph for a couple more blocks" approach is confirmed infeasible for real-time (or
+even reasonably-paced batch) use** — this quantitatively confirms and explains the
+original authors' shadow-estimator workaround, rather than revealing an oversight.
+
+### Revised technical direction
+
+Don't call `ceres::Covariance` (a whole-problem algorithm) at all. Instead, use
+`ceres::Problem::Evaluate()` restricted to only the *current epoch's newly-added*
+residual blocks (pseudorange/carrier-phase/Doppler, the IMU pre-integration factor to
+the previous pose, and visual reprojection factors for the current keyframe) to get
+their Jacobians, form a small local information matrix (`J^T J`, on the order of a few
+tens of dimensions — ambiguities + pose/velocity/bias) directly with Eigen, and invert
+that small block analytically. Cost should depend only on the number of *new* residuals
+per epoch (bounded, small), not on accumulated graph/window size — matching the
+shadow-estimator's own bounded-cost design principle, but using real joint information
+instead of a decoupled GNSS-only shadow problem. This needs its own cost measurement
+before trusting it, same as the first approach.
+
+Natural entry point: still `rtk_imu_camera_rrr_estimator.cpp:387`-ish, replacing the
+call into `ambiguity_covariance_estimator_`/`estimateAmbiguityCovariance()` — but the
+new implementation queries `graph_`'s current-epoch residual blocks directly rather
+than either the shadow graph or a naive full-block `computeCovariance()` call.
 
 Also noted: `AmbiguityResolution::addStableFixationToGraph()` is declared
 (`include/gici/gnss/ambiguity_resolution.h:260`) but has no implementation and no call
@@ -98,40 +134,35 @@ suggests, but worth re-checking once the design is more concrete).
 
 ## Plan
 
-1. **Measure the cost first.** Before designing around "the full joint covariance is
-   too expensive," verify that claim quantitatively on this repo's own hardware/window
-   sizes: instrument `rtk_imu_camera_rrr_estimator.cpp:387` to call
-   `graph_->computeCovariance()` with the ambiguity IDs plus the *current* pose/
-   velocity/attitude parameter-block IDs (not the whole sliding window) and time it
-   against the existing shadow-estimator path, on UrbanNav Medium (100% float — the
-   most informative case) and GICI-board 3.1/4.1. This determines whether the
-   "current-epoch-only" cross block is actually cheap enough for real-time use, which
-   is the load-bearing assumption of the whole contribution.
-2. If (1) is tractable: design how the cross-covariance actually improves AR —
-   candidates: (a) reshape the MLAMBDA decorrelation transform with the joint
-   information instead of the GNSS-marginal one, (b) tighten/adapt the ratio-test
-   threshold based on joint uncertainty, (c) a visual-consistency check on candidate
-   fixed solutions computed from the *same* joint covariance (not a separate VIO
-   thread, unlike Ran et al. 2026 above). Pick based on which gives the cleanest,
-   most defensible story — likely (a) or (b), since (c) starts to resemble the
-   existing external-signal approaches in the literature.
-3. If (1) is *not* tractable even for the current-epoch-only block: that itself is a
-   valid, honest finding (confirms/quantifies the original authors' tradeoff) — pivot
-   to a cheaper approximation (e.g. a fixed-lag or diagonal-only cross term) rather
-   than abandoning the direction.
-4. Implement as an opt-in estimator option (do not change existing locked baselines'
+1. ~~Measure the cost of a naive `ceres::Covariance`-based joint query.~~ **Done
+   2026-07-17 — infeasible, see cost measurement result above.**
+2. **Implement the Jacobian-based local information approach** (current step):
+   `ceres::Problem::Evaluate()` restricted to the current epoch's new residual
+   blocks, form `J^T J` directly, invert the small block. Measure its cost the same
+   way (same instrumentation pattern, new option) before trusting it.
+3. If (2) is tractable: design how the resulting local cross-information actually
+   improves AR — candidates: (a) reshape the MLAMBDA decorrelation transform with it
+   instead of the GNSS-marginal covariance, (b) tighten/adapt the ratio-test threshold
+   based on the joint local uncertainty, (c) a visual-consistency check on candidate
+   fixed solutions (closer to Ran et al. 2026's mechanism — prefer (a) or (b) if
+   possible, to stay differentiated from the external-signal literature).
+4. If (2) is *not* tractable either: pivot again (e.g. a fixed diagonal
+   approximation, or only using the IMU pre-integration factor's Jacobian rather than
+   the full current-epoch factor set) — each negative result narrows the design space
+   usefully rather than being a dead end.
+5. Implement as an opt-in estimator option (do not change existing locked baselines'
    default behavior) so `verify_upstream_fidelity.sh`-style comparisons stay valid.
-5. Evaluate on the existing locked baselines (GICI-board 1.1/3.1/4.1, UrbanNav
+6. Evaluate on the existing locked baselines (GICI-board 1.1/3.1/4.1, UrbanNav
    Medium/Deep) — Medium (100% float today) is the primary test case: does fixed-rate
    or accuracy improve without regressing the others?
-6. Ablation experiments folded into the same paper (not separate submissions, per
+7. Ablation experiments folded into the same paper (not separate submissions, per
    2026-07-17 discussion): base-RINEX-interval robustness (from the Medium fix) and
    resource-aware real-time behavior (from `research/ros2-live-nosparsify-experiment`)
    as supporting robustness results for the same core contribution, not separate claims.
-7. Deeper literature pass before submission (the 2026-07-17 pass above was a first
+8. Deeper literature pass before submission (the 2026-07-17 pass above was a first
    scoping check, not exhaustive) — particularly around the GS-GVINS / PO-GVINS /
    TITS 2024 factor-graph-AR line of work, to confirm none of them already do the
-   current-epoch cross-covariance approach.
+   current-epoch local-information approach.
 
 ## Out of scope
 
@@ -147,7 +178,8 @@ suggests, but worth re-checking once the design is more concrete).
 | Empirical motivation from this repo's own baseline work | done — Medium's 100% float rate |
 | Literature check (competitive landscape) | done, first pass — 2026-07-17; needs a deeper pass before submission |
 | Codebase deep-dive of current AR implementation | done (2026-07-17) — gap confirmed, root cause (shadow-estimator workaround) found, entry point identified at `rtk_imu_camera_rrr_estimator.cpp:387` |
-| Cost measurement of current-epoch-only cross-covariance | not started — **next step** |
-| Technical design | blocked on cost measurement above |
+| Cost measurement of naive `ceres::Covariance` joint query | done (2026-07-17) — **infeasible**: 86.4% of epochs > 50ms, mean 687ms once the sliding window fills (vs shadow estimator's constant ~0.4ms) |
+| Jacobian-based local information approach (design + cost measurement) | in progress — **current step** |
+| Technical design (how cross-info improves AR) | blocked on above |
 | Implementation | not started |
 | Evaluation | not started |

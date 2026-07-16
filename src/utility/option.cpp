@@ -875,6 +875,7 @@ void loadOptions<RtkImuCameraRrrEstimatorOptions>(
   LOAD_COMMON(max_keyframes);
   LOAD_COMMON(max_gnss_window_length_minor);
   LOAD_COMMON(min_yaw_std_init_visual);
+  LOAD_COMMON(benchmark_joint_ambiguity_covariance);
 }
 
 template <>
