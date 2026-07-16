@@ -12,6 +12,11 @@
     "ape_translation_rmse_m": 0.35,
     "ape_rotation_rmse_deg": 0.35
   },
+  "locked_reproduce_2026_07_15": {
+    "ape_translation_rmse_m": 0.142181,
+    "ape_rotation_rmse_deg": 1.078317,
+    "solution_epochs": 4733
+  },
   "tolerance": {
     "ape_translation_rmse_m": 0.05,
     "ape_rotation_rmse_deg": 0.15

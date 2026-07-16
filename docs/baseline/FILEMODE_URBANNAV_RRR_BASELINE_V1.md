@@ -7,6 +7,10 @@ start here. ROS 2 ports mirror this config after file-mode validation.
 Do **not** change estimator/calibration in a way that alters locked results
 without cutting a new baseline version.
 
+> **Deep and Medium are both locked** (see "Locked results" below). Medium still
+> fails the paper-accuracy comparison — a separate, known vertical-bias issue,
+> not a reproducibility problem (fixed 2026-07-16).
+
 ## Baseline identity
 
 | Item | Value |
@@ -29,10 +33,12 @@ GICI-board lever arms; not from upstream).
 | I/O / stream layout | `option/post_estimation_RTK_RRR_rinex_imutext.yaml` | `research/config/rtk_imu_camera_rrr_urbannav.yaml` (`stream:`) |
 | Estimator / calib | `ros_wrapper/src/gici/option/ros_urbannav.yaml` (RRR block, lines 395–518) | same file (`estimate:`) |
 
-Template SHA256 (lock reference):
+Template SHA256 (lock reference, `research/standard-env` branch tip — updated after
+the RRR estimator tuning commit; the old `e7eb80e6...` hash matched only the retired
+truncated-run Medium figure, not the current Deep lock or any full-trajectory number):
 
 ```text
-research/config/rtk_imu_camera_rrr_urbannav.yaml  e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4
+research/config/rtk_imu_camera_rrr_urbannav.yaml  d8250202c7a878375fd9b33270f1b646fea286905e506f018b86967e9a55d271
 option/post_estimation_RTK_RRR_rinex_imutext.yaml adcccd0e0a0c48383ad5761158bd7d363d339180e22136910d67e49e3a86a947
 ros_wrapper/src/gici/option/ros_urbannav.yaml      c0ac1cb8521497952c142288d9455eaa093351b4997c9d4912d2641d96c2c465
 ```
@@ -105,15 +111,37 @@ Pass criteria: `research/baseline/expected_urbannav_{medium,deep}.json`.
 | Run log | `results/baseline/urbannav/<ds>/run.log` |
 | Author APE output | `results/baseline/urbannav/<ds>/evaluation/ape_metrics.json` |
 
-## Locked results (author `evo_ape` Sim(3))
+## Locked results (author `evo_ape` Sim(3), full trajectory)
 
-| Dataset | APE position | APE rotation | Config | Lock date |
-| --- | ---: | ---: | --- | --- |
-| Medium | **3.214 m** | **6.325°** | `wrapper` | 2026-07-14 |
-| Deep | **0.335 m** | **0.925°** | `wrapper` | 2026-07-14 |
+| Dataset | APE position | APE rotation | Epochs | Config | Lock date | Status |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| Deep | **2.141 m** | **0.908°** | 15,119 | `wrapper` | 2026-07-15 | **LOCKED — PASS** |
+| Medium | **8.042 m** | **2.108°** | 7,379 | `wrapper` | 2026-07-16 | **LOCKED — fails paper** |
 
-Both re-locked on clean `f2b8579` core + wrapper config. Paper Table V references
-remain for comparison only.
+Deep re-locked on clean `f2b8579` core + wrapper config, full trajectory (the earlier
+`0.335 m / 0.925°` figure was from a truncated 2,230-epoch partial run and has been
+retired). Paper Table V references remain for comparison only.
+
+**Medium reproducibility was fixed 2026-07-16.** Four independent full-trajectory runs of
+the identical `wrapper` config against the identical dataset had produced translation RMSE
+of 6.9 m, 7.5 m, 14.1 m, and 16.8 m respectively (~3/5 runs segfaulting) — genuine
+run-to-run non-determinism, root-caused to three ASLR-sensitive undefined-behavior bugs
+(not config drift, not OpenCV RANSAC, not the `bc3761c` mutex fix, which only affects the
+multi-threaded ROS2 path, not this single-threaded post-file path):
+
+- `src/stream/formator.cpp` — `nav.eph[eph.sat-1]`/`nav.geph[prn-1]` indexed without
+  checking `satsys()` actually resolved the satellite; an unresolved id underflows the
+  heap allocation.
+- `src/fusion/gnss_imu_initializer.cpp` — `gnss_solution_measurements_` could be emptied
+  by a loop and then read via `front()`/`back()` unconditionally (heap-use-after-free).
+- `third_party/rtklib/src/rinex.c` — `init_rnxctr()` zeroed only 6 of `NUMSYS=7` signal-index
+  slots, leaving `tobs[6]` as uninitialized memory read by `set_index()`.
+
+All three are documented in `research/UPSTREAM_FIDELITY.md`. Post-fix, 3 independent
+full-trajectory runs cluster within 0.49 m / 0.20° of each other (7.74/8.23/8.16 m,
+2.00/2.21/2.11°) — see `research/baseline/expected_urbannav_medium.json` for the full
+sample. The converged ~8.0 m vs paper's 3.40 m is a **separate**, pre-existing accuracy
+gap (early vertical bias, see `research/AUTHOR_METHODOLOGY.md`), not non-determinism.
 
 ## Operational notes
 

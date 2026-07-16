@@ -219,8 +219,11 @@ def parse_solution(path: Path, gps_week_day_offset: float) -> list[dict[str, Any
         if len(parts) < 8:
             continue
         try:
+            # GICI's internal yaw is initialized as -atan2(Ve, Vn) (see
+            # gnss_imu_initializer.cpp), the negative of standard compass
+            # heading atan2(Ve, Vn); negate here so it's comparable to GT heading.
             esa_by_time[parts[1]] = {
-                "yaw": float(parts[7]) % 360.0,
+                "yaw": (-float(parts[7])) % 360.0,
             }
         except ValueError:
             continue

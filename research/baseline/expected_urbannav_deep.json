@@ -18,6 +18,7 @@
     "ape_translation_rmse_m": 0.35,
     "ape_rotation_rmse_deg": 0.35
   },
+  "status": "LOCKED — reproduced, current on-disk result matches this within ~0.001 m / 0.001 deg",
   "locked_reproduce_2026_07_15": {
     "ape_translation_rmse_m": 2.141,
     "ape_rotation_rmse_deg": 0.907,
