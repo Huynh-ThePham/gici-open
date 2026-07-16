@@ -1742,7 +1742,13 @@ extern int init_rnxctr(rnxctr_t *rnx)
     rnx->time=time0;
     rnx->ver=0.0;
     rnx->sys=rnx->tsys=0;
-    for (i=0;i<6;i++) for (j=0;j<MAXOBSTYPE;j++) rnx->tobs[i][j][0]='\0';
+    /* NUMSYS==7 (adds SYS_IRN); this loop must clear all NUMSYS slots, not
+       just the first 6, or tobs[6] is uninitialized heap/stack garbage that
+       set_index() then walks past MAXOBSTYPE looking for a null terminator
+       (observed as intermittent UBSan array-bounds errors at varying indices
+       and as a likely contributor to non-reproducible RTK/IMU/camera RRR
+       results on RINEX inputs with no IRNSS header line). */
+    for (i=0;i<NUMSYS;i++) for (j=0;j<MAXOBSTYPE;j++) rnx->tobs[i][j][0]='\0';
     rnx->obs.n=0;
     rnx->nav.n=MAXSAT*2;
     rnx->nav.ng=NSATGLO;
