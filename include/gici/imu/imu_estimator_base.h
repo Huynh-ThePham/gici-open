@@ -262,7 +262,11 @@ protected:
   // Measurements
   ImuMeasurements imu_measurements_;
   bool do_not_remove_imu_measurements_ = false;
-  std::mutex imu_mutex_, imu_state_mutex_;
+  std::mutex imu_mutex_;
+  // states_/covariances_/graph_ (and the last_* cache below) are guarded by
+  // the inherited EstimatorBase::estimator_state_mutex_ (recursive) instead
+  // of a separate imu_state_mutex_, so the cache and the base-class state
+  // share one lock -- see estimator_base.h.
 
   // Body to IMU transformation to rotate variables
   Transformation T_BI_;

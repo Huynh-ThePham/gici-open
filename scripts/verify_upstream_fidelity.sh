@@ -15,7 +15,29 @@ ALLOWED_DELTA=(
   "src/stream/data_integration.cpp"     # free rs_prc/dts_prc/var_prc (leak)
   "src/stream/formator.cpp"             # guard eph.sat / geph prn bounds before nav.eph[]/nav.geph[] index (heap-buffer-underflow segfault)
   "src/fusion/gnss_imu_initializer.cpp" # guard empty deque before front()/back() (heap-use-after-free)
-  "src/fusion/rtk_imu_camera_rrr_estimator.cpp" # imu_state_mutex_ guard for the real-time (multi-thread) path -- research/ros2-realtime-fix only
+
+  # estimator_state_mutex_ real-time (multi-thread) race fix -- research/ros2-realtime-fix
+  # only. The original imu_state_mutex_ (commit bc3761c) only covered the
+  # states_ push/pop in RtkImuCameraRrrEstimator; it left the ImuEstimatorBase
+  # last_* cache, the covariances_ map, graph_->solve() vs concurrent reads,
+  # and every other IMU/GNSS-only estimator's states_ shift unguarded. This
+  # promotes the mutex to EstimatorBase (renamed estimator_state_mutex_,
+  # recursive) and locks all of the above consistently. See
+  # research/UPSTREAM_FIDELITY.md.
+  "include/gici/estimate/estimator_base.h"
+  "src/estimate/estimator_base.cpp"
+  "include/gici/imu/imu_estimator_base.h"
+  "src/imu/imu_estimator_base.cpp"
+  "src/fusion/rtk_imu_camera_rrr_estimator.cpp"
+  "src/fusion/spp_imu_camera_rrr_estimator.cpp"
+  "src/fusion/gnss_imu_camera_srr_estimator.cpp"
+  "include/gici/fusion/rtk_imu_tc_estimator.h"
+  "include/gici/fusion/spp_imu_tc_estimator.h"
+  "include/gici/fusion/gnss_imu_lc_estimator.h"
+  "include/gici/fusion/ppp_imu_tc_estimator.h"
+  "src/gnss/spp_estimator.cpp"
+  "src/gnss/dgnss_estimator.cpp"
+  "src/gnss/sdgnss_estimator.cpp"
 )
 
 cd "$ROOT"
