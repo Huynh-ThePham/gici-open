@@ -109,7 +109,9 @@ python3 scripts/run_urbannav_rrr_baseline.py medium
 | ROS 2 run + eval | `./scripts/run_gici_board_ros2_sequence.sh 1.1 3.1 4.1` |
 | Both + compare | `./scripts/run_gici_board_table5_comparison.sh` |
 
-Locked `evo_ape` (Sim(3), full trajectory), 2026-07-15:
+Locked `evo_ape` (Sim(3), full trajectory), 2026-07-15, **re-verified 2026-07-16 against
+the rebuilt ROS 2 workspace (`ros2_wrapper`) containing all 4 UB bugfixes** — numbers
+unchanged within noise, confirming those bugs don't trigger on GICI-board data:
 
 | Scene | file-mode pos/rot | ROS 2 pos/rot | Paper Table V |
 |-------|-------------------|---------------|---------------|

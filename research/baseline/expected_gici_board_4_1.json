@@ -21,5 +21,10 @@
     "ape_translation_rmse_m": 0.05,
     "ape_rotation_rmse_deg": 0.15
   },
-  "notes": "Set GICI_RTCM_START_TIME=2023.05.21 for RTCM reference/ephemeris decode (dataset collection date)."
+  "notes": "Set GICI_RTCM_START_TIME=2023.05.21 for RTCM reference/ephemeris decode (dataset collection date).",
+  "verified_post_ub_fix_2026_07_16": {
+    "file_mode": {"ape_translation_rmse_m": 0.0722, "ape_rotation_rmse_deg": 0.761},
+    "ros2": {"ape_translation_rmse_m": 0.0723, "ape_rotation_rmse_deg": 0.741},
+    "notes": "Re-verified against the core built with all 4 UB bugfixes; ROS2 workspace rebuilt to pick up the fixes. Numbers unchanged within noise vs locked_reproduce_2026_07_15."
+  }
 }
