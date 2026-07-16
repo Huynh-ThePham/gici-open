@@ -74,33 +74,34 @@ RosStream::RosStream(
   for (const auto& input_tag : streamer_node->input_tags) {
     if (input_tag.substr(0, 4) != "str_") continue;
     if (nodes->tag_to_node.at(input_tag)->type != "ros") {
-      LOG(ERROR) << "Only the ROS streamer can directly connect to a ROS streamer!"
-        << " Invalid tag is " << input_tag << " in " << tag_;
+      RCLCPP_ERROR(node_->get_logger(),
+        "Only the ROS streamer can directly connect to a ROS streamer! "
+        "Invalid tag is %s in %s", input_tag.c_str(), tag_.c_str());
       return;
     }
     if (input_ros_stream_tag_.empty()) input_ros_stream_tag_ = input_tag;
     else {
-      LOG(ERROR) << "Only one input stream is supported for ROS stream!";
+      RCLCPP_ERROR(node_->get_logger(), "Only one input stream is supported for ROS stream!");
       return;
     }
   }
   if (!option_tools::safeGet(streamer_node->this_node, "topic_name", &topic_name_)) {
-    LOG(ERROR) << "Unable to load ROS topic name!";
+    RCLCPP_ERROR(node_->get_logger(), "Unable to load ROS topic name!");
     return;
   }
   if (!option_tools::safeGet(streamer_node->this_node, "queue_size", &queue_size_)) {
-    LOG(INFO) << "Unable to load ROS topic queue size. Using default instead";
+    RCLCPP_INFO(node_->get_logger(), "Unable to load ROS topic queue size. Using default instead");
     queue_size_ = 10;
   }
   std::string type_str;
   if (!option_tools::safeGet(streamer_node->this_node, "io", &type_str)) {
-    LOG(ERROR) << "Unable to load ROS streamer I/O type!";
+    RCLCPP_ERROR(node_->get_logger(), "Unable to load ROS streamer I/O type!");
     return;
   }
   option_tools::convert(type_str, io_type_);
   if (io_type_ == StreamIOType::Log) io_type_ = StreamIOType::Output;
   if (io_type_ != StreamIOType::Input && io_type_ != StreamIOType::Output) {
-    LOG(ERROR) << "Invalid IO type for ROS streamer!";
+    RCLCPP_ERROR(node_->get_logger(), "Invalid IO type for ROS streamer!");
   }
   // QoS: configurable via an optional `qos:` block, with defaults that preserve
   // the original behavior (input = reliable + keep_all so replayed bags never
@@ -112,7 +113,7 @@ RosStream::RosStream(
   // initialize ros topic
   std::string data_format;
   if (!option_tools::safeGet(streamer_node->this_node, "format", &data_format)) {
-    LOG(ERROR) << "Unable to load ROS topic format!";
+    RCLCPP_ERROR(node_->get_logger(), "Unable to load ROS topic format!");
     return;
   }
   if (data_format == "image") {
@@ -222,8 +223,9 @@ RosStream::RosStream(
   else if (data_format == "pose_stamped") {
     data_format_ = RosDataFormat::PoseStamped;
     if (io_type_ == StreamIOType::Input) {
-      LOG(ERROR) << "Setting pose stamped topic as input is disabled! If you want to input pose"
-                 << ", use \"pose_with_covariance_stamped\" instead.";
+      RCLCPP_ERROR(node_->get_logger(),
+        "Setting pose stamped topic as input is disabled! If you want to input pose"
+        ", use \"pose_with_covariance_stamped\" instead.");
       return;
     }
     else {
@@ -252,8 +254,9 @@ RosStream::RosStream(
         input_coordinate_.reset(new GeoCoordinate(initial_global_position, GeoType::LLA));
       }
       else {
-        LOG(ERROR) << "A initial_global_position is required for the "
-                   << "pose_with_covariance_stamped topic in input mode!";
+        RCLCPP_ERROR(node_->get_logger(),
+          "A initial_global_position is required for the "
+          "pose_with_covariance_stamped topic in input mode!");
         return;
       }
     }
@@ -269,7 +272,7 @@ RosStream::RosStream(
   else if (data_format == "odometry") {
     data_format_ = RosDataFormat::Odometry;
     if (io_type_ == StreamIOType::Input) {
-      LOG(ERROR) << "Setting odometry topic as input is disabled!";
+      RCLCPP_ERROR(node_->get_logger(), "Setting odometry topic as input is disabled!");
       return;
     }
     else {
@@ -280,7 +283,7 @@ RosStream::RosStream(
         tranform_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*node_);
       }
       else {
-        LOG(ERROR) << "A subframe_id is required for the odometry topic!";
+        RCLCPP_ERROR(node_->get_logger(), "A subframe_id is required for the odometry topic!");
         return;
       }
     }
@@ -299,7 +302,7 @@ RosStream::RosStream(
   else if (data_format == "marker") {
     data_format_ = RosDataFormat::Marker;
     if (io_type_ == StreamIOType::Input) {
-      LOG(ERROR) << "Setting marker topic as input is disabled!";
+      RCLCPP_ERROR(node_->get_logger(), "Setting marker topic as input is disabled!");
       return;
     }
     else {
@@ -310,7 +313,7 @@ RosStream::RosStream(
   else if (data_format == "path") {
     data_format_ = RosDataFormat::Path;
     if (io_type_ == StreamIOType::Input) {
-      LOG(ERROR) << "Setting path topic as input is disabled!";
+      RCLCPP_ERROR(node_->get_logger(), "Setting path topic as input is disabled!");
       return;
     }
     else {

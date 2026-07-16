@@ -21,10 +21,12 @@ int main(int argc, char** argv)
   rclcpp::init(argc, argv);
 
   // Get config file. ROS 2 injects its own args; keep the first non-ROS argument.
+  // Uses a named logger (not node->get_logger()) since no Node exists yet.
   std::vector<std::string> args = rclcpp::remove_ros_arguments(argc, argv);
   if (args.size() != 2) {
-    std::cerr << "Invalid input variables! Supported variables are: "
-              << "<path-to-executable> <path-to-config>" << std::endl;
+    RCLCPP_ERROR(rclcpp::get_logger("gici_ros2"),
+      "Invalid input variables! Supported variables are: "
+      "<path-to-executable> <path-to-config>");
     rclcpp::shutdown();
     return -1;
   }
@@ -33,7 +35,7 @@ int main(int argc, char** argv)
   try {
      yaml_node = YAML::LoadFile(config_file_path);
   } catch (YAML::BadFile &e) {
-    std::cerr << "Unable to load config file!" << std::endl;
+    RCLCPP_ERROR(rclcpp::get_logger("gici_ros2"), "Unable to load config file!");
     rclcpp::shutdown();
     return -1;
   }
@@ -63,7 +65,7 @@ int main(int argc, char** argv)
   NodeOptionHandlePtr node_option_handle =
     std::make_shared<NodeOptionHandle>(yaml_node);
   if (!node_option_handle->valid) {
-    std::cerr << "Invalid configurations!" << std::endl;
+    RCLCPP_ERROR(rclcpp::get_logger("gici_ros2"), "Invalid configurations!");
     rclcpp::shutdown();
     return -1;
   }
@@ -75,16 +77,20 @@ int main(int argc, char** argv)
   std::unique_ptr<RosNodeHandle> node_handle =
     std::make_unique<RosNodeHandle>(node, node_option_handle);
 
-  // Show information
+  // Show information. Logged via RCLCPP_INFO (not std::cout) so it appears on
+  // /rosout and respects ros2 launch log-level filtering; the substring
+  // "Initialized N streamers...Running" is still what
+  // scripts/ros2/ros2_bag_replay_common.sh greps for readiness, and grep -E
+  // is not anchored so the RCLCPP_INFO log prefix does not break that check.
   const std::vector<size_t> sizes = {
     node_option_handle->streamers.size(),
     node_option_handle->formators.size(),
     node_option_handle->estimators.size()};
-  std::cout << "Initialized "
-    << sizes[0] << " streamer" << (sizes[0] > 1 ? "s" : "") << ", "
-    << sizes[1] << " formater" << (sizes[1] > 1 ? "s" : "") << ", and "
-    << sizes[2] << " estimator" << (sizes[2] > 1 ? "s" : "") << ". "
-    << "Running..." << std::endl;
+  RCLCPP_INFO(node->get_logger(),
+    "Initialized %zu streamer%s, %zu formater%s, and %zu estimator%s. Running...",
+    sizes[0], sizes[0] > 1 ? "s" : "",
+    sizes[1], sizes[1] > 1 ? "s" : "",
+    sizes[2], sizes[2] > 1 ? "s" : "");
 
   // Start running all threads
   SpinControl::run();
