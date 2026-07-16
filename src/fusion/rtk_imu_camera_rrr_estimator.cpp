@@ -795,6 +795,13 @@ bool RtkImuCameraRrrEstimator::estimateAmbiguityCovariance(
 }
 
 // Research diagnostic: see RtkImuCameraRrrEstimatorOptions::benchmark_joint_ambiguity_covariance.
+//
+// Round 1 (2026-07-17, see research/VISION_AIDED_AR.md) measured graph_->computeCovariance()
+// (ceres::Covariance, a whole-problem algorithm) for ambiguities + current pose/speed-bias:
+// confirmed infeasible (mean 687ms, 86.4% of epochs > 50ms once the sliding window fills).
+// Round 2 (this version) measures Graph::getLocalCrossInformation() instead, which evaluates
+// only the residuals touching the requested blocks directly (no ceres::Covariance/Problem
+// involvement), so its cost should depend on residuals-per-epoch, not total graph size.
 void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& state)
 {
   namespace chrono = std::chrono;
@@ -810,7 +817,7 @@ void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& st
 
   // Current epoch's pose block (position/attitude, tightly coupled with IMU) plus its
   // IMU speed-and-bias companion block, if resolvable -- this is the "current-epoch-only"
-  // cross-covariance scope proposed in research/VISION_AIDED_AR.md, as opposed to the full
+  // cross-information scope proposed in research/VISION_AIDED_AR.md, as opposed to the full
   // sliding window (all keyframes/landmarks/historical ambiguities) that the original
   // authors judged too expensive.
   size_t num_pose_blocks = 0;
@@ -824,12 +831,13 @@ void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& st
     }
   }
 
-  // Time: joint-graph covariance query (ambiguities + current pose/speed-bias only).
-  Eigen::MatrixXd joint_covariance;
+  // Time: local cross-information query (Round 2 -- EvaluateWithMinimalJacobians on
+  // residuals touching the requested blocks only, no ceres::Covariance/Problem::Evaluate).
+  Eigen::MatrixXd local_information;
   auto t0 = chrono::steady_clock::now();
-  bool joint_ok = graph_->computeCovariance(parameter_block_ids, joint_covariance);
+  bool local_ok = graph_->getLocalCrossInformation(parameter_block_ids, local_information);
   auto t1 = chrono::steady_clock::now();
-  double joint_ms = chrono::duration<double, std::milli>(t1 - t0).count();
+  double local_ms = chrono::duration<double, std::milli>(t1 - t0).count();
 
   // Time: the existing shadow-estimator path, for direct comparison (recomputed here
   // purely for benchmarking; estimateAmbiguityCovariance() above already did this once
@@ -841,8 +849,20 @@ void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& st
   auto t3 = chrono::steady_clock::now();
   double shadow_ms = chrono::duration<double, std::milli>(t3 - t2).count();
 
+  // Sanity: is the accumulated local information matrix actually invertible /
+  // well-conditioned? (Doesn't affect timing, but tells us if the approach produces
+  // something usable, not just something fast.)
+  double min_eigenvalue = 0.0;
+  if (local_ok && local_information.rows() > 0) {
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(
+      local_information, Eigen::EigenvaluesOnly);
+    min_eigenvalue = es.eigenvalues().minCoeff();
+  }
+
   LOG(INFO) << "[vaar-benchmark] t=" << std::fixed << std::setprecision(3) << state.timestamp
-    << " joint_ok=" << joint_ok << " joint_ms=" << joint_ms
+    << " local_ok=" << local_ok << " local_ms=" << local_ms
+    << " local_dim=" << local_information.rows()
+    << " local_min_eig=" << std::setprecision(6) << min_eigenvalue
     << " num_ambiguity_blocks=" << num_ambiguity_blocks
     << " num_pose_blocks=" << num_pose_blocks
     << " graph_num_parameter_blocks=" << graph_->parameters().size()

@@ -44,6 +44,7 @@
 #include "gici/estimate/graph.h"
 
 #include <ceres/ordered_groups.h>
+#include <unordered_set>
 
 #include "gici/estimate/homogeneous_point_parameter_block.h"
 #include "gici/estimate/marginalization_error.h"
@@ -166,6 +167,102 @@ void Graph::getLhs(uint64_t parameter_block_id, Eigen::MatrixXd& H)
     delete[] jacobians_raw;
     delete[] jacobians_minimal_raw;
   }
+}
+
+// research/vision-aided-ambiguity-resolution: local information matrix (with cross
+// terms) over a small set of parameter blocks -- see graph.h for the full rationale.
+bool Graph::getLocalCrossInformation(
+    const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information)
+{
+  std::vector<size_t> offsets(parameter_block_ids.size());
+  std::vector<size_t> sizes(parameter_block_ids.size());
+  size_t total_size = 0;
+  std::unordered_map<uint64_t, size_t> id_to_index;
+  for (size_t k = 0; k < parameter_block_ids.size(); k++) {
+    if (!parameterBlockExists(parameter_block_ids[k])) return false;
+    auto block = parameterBlockPtr(parameter_block_ids[k]);
+    offsets[k] = total_size;
+    sizes[k] = block->minimalDimension();
+    total_size += sizes[k];
+    id_to_index[parameter_block_ids[k]] = k;
+  }
+  information.setZero(total_size, total_size);
+
+  // Union of residual blocks touching any requested parameter block, deduplicated
+  // (a residual can be reached via more than one of the requested blocks).
+  std::unordered_set<ceres::ResidualBlockId> seen_residuals;
+  ResidualBlockCollection touched_residuals;
+  for (auto id : parameter_block_ids) {
+    for (auto& r : residuals(id)) {
+      if (seen_residuals.insert(r.residual_block_id).second) {
+        touched_residuals.push_back(r);
+      }
+    }
+  }
+
+  for (auto& res : touched_residuals) {
+    ParameterBlockCollection pars = parameters(res.residual_block_id);
+
+    double** parameters_raw = new double*[pars.size()];
+    Eigen::VectorXd residuals_eigen(res.error_interface_ptr->residualDim());
+    double* residuals_raw = residuals_eigen.data();
+
+    double** jacobians_raw = new double*[pars.size()];
+    std::vector<
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>,
+        Eigen::aligned_allocator<
+            Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic,
+                Eigen::RowMajor> > > jacobiansEigen(pars.size());
+
+    double** jacobians_minimal_raw = new double*[pars.size()];
+    std::vector<
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>,
+        Eigen::aligned_allocator<
+            Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic,
+                Eigen::RowMajor> > > jacobians_minimal_eigen(pars.size());
+
+    // Which requested-block index (if any) each of this residual's touched
+    // parameters corresponds to; parameters not in parameter_block_ids (e.g. a
+    // previous pose, or visual landmarks) get -1 and are evaluated (fixed at their
+    // current value) but not accumulated -- this is the "condition on current
+    // estimate" approximation described in graph.h.
+    std::vector<int> local_index(pars.size(), -1);
+    for (size_t j = 0; j < pars.size(); ++j) {
+      auto it = id_to_index.find(pars[j].second->id());
+      if (it != id_to_index.end()) local_index[j] = static_cast<int>(it->second);
+      parameters_raw[j] = pars[j].second->parameters();
+      jacobiansEigen[j].resize(res.error_interface_ptr->residualDim(),
+                               pars[j].second->dimension());
+      jacobians_raw[j] = jacobiansEigen[j].data();
+      jacobians_minimal_eigen[j].resize(res.error_interface_ptr->residualDim(),
+                                      pars[j].second->minimalDimension());
+      jacobians_minimal_raw[j] = jacobians_minimal_eigen[j].data();
+    }
+
+    res.error_interface_ptr->EvaluateWithMinimalJacobians(parameters_raw,
+                                                           residuals_raw,
+                                                           jacobians_raw,
+                                                           jacobians_minimal_raw);
+
+    for (size_t a = 0; a < pars.size(); ++a) {
+      if (local_index[a] < 0) continue;
+      const size_t row_off = offsets[local_index[a]];
+      const size_t row_size = sizes[local_index[a]];
+      for (size_t b = 0; b < pars.size(); ++b) {
+        if (local_index[b] < 0) continue;
+        const size_t col_off = offsets[local_index[b]];
+        const size_t col_size = sizes[local_index[b]];
+        information.block(row_off, col_off, row_size, col_size) +=
+          jacobians_minimal_eigen[a].transpose() * jacobians_minimal_eigen[b];
+      }
+    }
+
+    delete[] parameters_raw;
+    delete[] jacobians_raw;
+    delete[] jacobians_minimal_raw;
+  }
+
+  return true;
 }
 
 // Check a Jacobian with numeric differences.

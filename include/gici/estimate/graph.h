@@ -138,6 +138,32 @@ public:
    */
   void getLhs(uint64_t parameter_block_id, Eigen::MatrixXd& H);
 
+  /**
+   * @brief research/vision-aided-ambiguity-resolution: obtain a *local* information
+   *        matrix (in minimal/tangent space) over a small, caller-chosen set of
+   *        parameter blocks, including their cross terms -- e.g. current-epoch
+   *        ambiguities and the current pose/speed-and-bias block. Unlike
+   *        computeCovariance() (which goes through ceres::Covariance and whose cost
+   *        was measured to scale with the *whole* graph's size, see
+   *        research/VISION_AIDED_AR.md), this only evaluates residuals touching the
+   *        requested blocks directly via ErrorInterface::EvaluateWithMinimalJacobians
+   *        (the same mechanism getLhs() above uses), so its cost should depend only
+   *        on how many residuals touch those specific blocks, not on total graph
+   *        size. Parameter blocks referenced by those residuals but *not* in
+   *        parameter_block_ids (e.g. a previous pose, or visual landmarks) are
+   *        treated as fixed at their current linearization point -- their Jacobian
+   *        columns are simply not accumulated. This is an approximation (not the
+   *        exact joint-graph covariance), and does not apply loss-function
+   *        robustification (same simplification as getLhs()).
+   * @param[in] parameter_block_ids The blocks to include, in the order their rows/
+   *            columns should appear in the output.
+   * @param[out] information The local information matrix (sum of minimalDimension()
+   *             over parameter_block_ids, square), block-ordered to match the input.
+   * @return True if all requested blocks exist in the graph.
+   */
+  bool getLocalCrossInformation(
+      const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information);
+
   /// @name add/remove
   /// @{
 

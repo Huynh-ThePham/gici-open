@@ -126,6 +126,50 @@ call into `ambiguity_covariance_estimator_`/`estimateAmbiguityCovariance()` — 
 new implementation queries `graph_`'s current-epoch residual blocks directly rather
 than either the shadow graph or a naive full-block `computeCovariance()` call.
 
+### Local Jacobian approach — cost measurement result (2026-07-17) — confirmed tractable
+
+Implemented `Graph::getLocalCrossInformation()` (`include/gici/estimate/graph.h`,
+`src/estimate/graph.cpp`): builds on the existing (previously unused/dead)
+`Graph::getLhs()` pattern — evaluates only the residual blocks touching the requested
+parameter blocks directly via `ErrorInterface::EvaluateWithMinimalJacobians`, no
+`ceres::Covariance`/`Problem::Evaluate` involvement — and generalizes it to accumulate
+*cross* terms between multiple requested blocks (ambiguities + current pose +
+speed-and-bias), not just one block's diagonal.
+
+Measured the same way as the first (infeasible) approach, on the same UrbanNav Medium
+run (640 epochs):
+
+| Graph size (parameter blocks) | Local-information query (mean / max) |
+|---|---|
+| < 100 | 0.15 ms / 0.44 ms |
+| 200-300 (steady state) | 0.19 ms / 0.93 ms |
+| 400+ | 0.40 ms / 0.96 ms |
+| **Overall** | mean 0.21 ms, median 0.18 ms, **0/640 epochs exceed 1 ms** |
+
+Roughly a **3000x** speedup over the `ceres::Covariance`-based approach (mean 687ms),
+and critically the cost stays essentially flat as graph size grows 100→400+ blocks —
+confirming it depends on residuals-per-epoch, not accumulated graph size, as
+hypothesized. Total run wall time also dropped from 932s to 501s with this
+diagnostic running every epoch, consistent with the per-call cost drop. **This
+resolves the load-bearing feasibility question: a local, current-epoch cross-
+information computation is real-time-viable.**
+
+**Open issue found in the same measurement, to resolve before designing the AR
+mechanism on top of this:** 285/640 epochs (44.5%) have a near-zero minimum eigenvalue
+in the local information matrix (i.e. it's rank-deficient/near-singular on its own),
+and 240 of those show the *exact same* floating-point value (0.000278) across epochs
+with different graph sizes and ambiguity counts — too consistent to be numerical
+coincidence, more likely a specific direction (probably an ambiguity or attitude
+component) that genuinely has zero local information from the current epoch's
+residuals alone (e.g. an ambiguity just added this epoch with no phaserange
+observation yet, or an attitude component that needs multiple epochs of IMU
+integration to become observable). This is an expected consequence of using
+single-epoch information in isolation, not necessarily a bug — but means the final
+design cannot use this local information standalone; it must be *fused with a prior*
+(the existing shadow-estimator covariance, or the marginalization prior already
+computed for the sliding window) before it's usable for AR, rather than treated as a
+complete replacement.
+
 Also noted: `AmbiguityResolution::addStableFixationToGraph()` is declared
 (`include/gici/gnss/ambiguity_resolution.h:260`) but has no implementation and no call
 site anywhere — dead code, apparently intended for constraining stable-fixed
@@ -136,20 +180,24 @@ suggests, but worth re-checking once the design is more concrete).
 
 1. ~~Measure the cost of a naive `ceres::Covariance`-based joint query.~~ **Done
    2026-07-17 — infeasible, see cost measurement result above.**
-2. **Implement the Jacobian-based local information approach** (current step):
-   `ceres::Problem::Evaluate()` restricted to the current epoch's new residual
-   blocks, form `J^T J` directly, invert the small block. Measure its cost the same
-   way (same instrumentation pattern, new option) before trusting it.
-3. If (2) is tractable: design how the resulting local cross-information actually
-   improves AR — candidates: (a) reshape the MLAMBDA decorrelation transform with it
-   instead of the GNSS-marginal covariance, (b) tighten/adapt the ratio-test threshold
-   based on the joint local uncertainty, (c) a visual-consistency check on candidate
-   fixed solutions (closer to Ran et al. 2026's mechanism — prefer (a) or (b) if
-   possible, to stay differentiated from the external-signal literature).
-4. If (2) is *not* tractable either: pivot again (e.g. a fixed diagonal
-   approximation, or only using the IMU pre-integration factor's Jacobian rather than
-   the full current-epoch factor set) — each negative result narrows the design space
-   usefully rather than being a dead end.
+2. ~~Implement + measure the Jacobian-based local information approach.~~ **Done
+   2026-07-17 — confirmed tractable (~3000x faster, cost independent of graph size).
+   Also found: local-only information is near-singular in ~45% of epochs — must be
+   fused with a prior, see above.**
+3. **Fuse the local information with a prior** (current step): combine
+   `getLocalCrossInformation()`'s output with the existing shadow-estimator's
+   ambiguity covariance (information-form addition: convert the shadow covariance to
+   information, add the local cross-information, invert the sum) so the result is
+   well-conditioned even when the current epoch alone under-constrains some
+   direction. This also has a nice framing: the shadow estimator already gives a
+   correct-if-decoupled *ambiguity* prior; this adds the *cross* terms it structurally
+   cannot have (no visual/IMU states in that shadow graph at all).
+4. Design how the resulting fused cross-information actually improves AR —
+   candidates: (a) reshape the MLAMBDA decorrelation transform with it instead of the
+   GNSS-marginal covariance, (b) tighten/adapt the ratio-test threshold based on the
+   fused joint uncertainty, (c) a visual-consistency check on candidate fixed
+   solutions (closer to Ran et al. 2026's mechanism — prefer (a) or (b) if possible,
+   to stay differentiated from the external-signal literature).
 5. Implement as an opt-in estimator option (do not change existing locked baselines'
    default behavior) so `verify_upstream_fidelity.sh`-style comparisons stay valid.
 6. Evaluate on the existing locked baselines (GICI-board 1.1/3.1/4.1, UrbanNav
@@ -179,7 +227,8 @@ suggests, but worth re-checking once the design is more concrete).
 | Literature check (competitive landscape) | done, first pass — 2026-07-17; needs a deeper pass before submission |
 | Codebase deep-dive of current AR implementation | done (2026-07-17) — gap confirmed, root cause (shadow-estimator workaround) found, entry point identified at `rtk_imu_camera_rrr_estimator.cpp:387` |
 | Cost measurement of naive `ceres::Covariance` joint query | done (2026-07-17) — **infeasible**: 86.4% of epochs > 50ms, mean 687ms once the sliding window fills (vs shadow estimator's constant ~0.4ms) |
-| Jacobian-based local information approach (design + cost measurement) | in progress — **current step** |
-| Technical design (how cross-info improves AR) | blocked on above |
-| Implementation | not started |
-| Evaluation | not started |
+| Jacobian-based local information approach (`Graph::getLocalCrossInformation`) | done (2026-07-17) — **tractable**: mean 0.21ms, 0/640 epochs > 1ms, cost independent of graph size (~3000x faster than the naive approach) |
+| Fuse local information with a prior (shadow-estimator covariance) | not started — **current step**; needed because ~45% of epochs are near-singular using local-only information |
+| Technical design (how fused cross-info improves AR: decorrelation vs. ratio-test vs. validation) | blocked on above |
+| Implementation (wired into the real AR decision, not just diagnostics) | not started |
+| Evaluation on locked baselines | not started |
