@@ -115,7 +115,16 @@ for ((i = 1; i <= RUNS; i++)); do
   fi
 
   gpgga="$(count_gpgga "${OUT}/solution.txt")"
-  sparsify="$(rg -c 'Sparsifying measurements' "${OUT}/node.log" 2>/dev/null || true)"
+  # Use grep, not rg: sourcing /opt/ros/humble/setup.bash + install/setup.bash
+  # rewrites PATH and drops wherever `rg` is installed (e.g. ~/.cargo/bin), so
+  # `rg` silently resolves to "command not found" in this exact script context
+  # -- caught by `2>/dev/null` and masked by `|| true`/the surrounding `if`,
+  # meaning segfault detection and sparsify_count always reported a false
+  # "clean" result regardless of the actual log contents. Confirmed via
+  # manual grep against a completed batch30 run on ros2-realtime-fix: every
+  # run had hundreds to thousands of real "Sparsifying measurements" lines
+  # the old rg-based check never saw. grep is POSIX, no such PATH dependency.
+  sparsify="$(grep -cE 'Sparsifying measurements' "${OUT}/node.log" 2>/dev/null || true)"
   sparsify="${sparsify:-0}"
 
   if (( gpgga >= MIN_GPGGA )); then
@@ -124,7 +133,7 @@ for ((i = 1; i <= RUNS; i++)); do
     notes="${notes:+$notes; }gpgga=${gpgga}<${MIN_GPGGA}"
   fi
 
-  if rg -q 'Received a segment fault|handleSegv' "${OUT}/node.log" 2>/dev/null; then
+  if grep -qE 'Received a segment fault|handleSegv' "${OUT}/node.log" 2>/dev/null; then
     if (( trajectory_ok == 0 )); then
       segfault=1
       notes="${notes:+$notes; }segfault"
@@ -137,7 +146,7 @@ for ((i = 1; i <= RUNS; i++)); do
     notes="${notes:+$notes; }sigsegv"
   fi
   if (( exit_code == 134 )) && (( trajectory_ok == 0 )) \
-      && rg -q 'Received a segment fault|handleSegv|CHECK failed' "${OUT}/node.log" 2>/dev/null; then
+      && grep -qE 'Received a segment fault|handleSegv|CHECK failed' "${OUT}/node.log" 2>/dev/null; then
     segfault=1
     notes="${notes:+$notes; }aborted"
   fi
