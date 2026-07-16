@@ -2,16 +2,39 @@
 
 ## Branch policy
 
+Four branches, two independent lines both rooted at the GICI-board baseline
+(`cc444b2`):
+
+```
+cc444b2 ── research/standard-env            (upstream-clean reference)
+        └─ research/ros2-realtime-fix       (real-time correctness: UB fixes,
+                                              race-condition fix, ROS2 conventions)
+              └─ tag realtime-safe-v1 (e3f3456)
+                    └─ research/ros2-standard-interface   (ROS2 wrapper interface:
+                                                            launch files, live
+                                                            topics/tf2, ROS params)
+                          └─ research/ros2-live-nosparsify-experiment
+                                              (experiment: disable backend
+                                               sparsify, live vs. file-mode APE)
+```
+
 | Branch | Role | Core vs `f2b8579` |
 |--------|------|-------------------|
 | **`research/standard-env`** | **Upstream-clean reference** — file-mode + ROS2 **postfile** only; paper/locked baselines | **0 delta** (`verify_upstream_fidelity.sh` → OK) |
-| **`research/ros2-realtime-fix`** | **Runtime baseline** — real-time ROS2 bag replay @ rate 1.0; tag **`realtime-safe-v1`** | **1 file** (`rtk_imu_camera_rrr_estimator.cpp` mutex guard) + wrapper/infra only |
+| **`research/ros2-realtime-fix`** | **Runtime baseline** — real-time ROS2 bag replay @ rate 1.0 | 4 documented UB bugfixes + the real-time race-condition fix (`estimator_state_mutex_`), wrapper/infra only — see `research/UPSTREAM_FIDELITY.md` |
+| **`research/ros2-standard-interface`** | **ROS2 wrapper interface** — `ros2 launch`, live topic-driven node (`/gici/odom`, `/gici/path`, `/gici/pose` + TF), ROS params (`config_file`, `use_sim_time`). Wrapper/scripts only, same core as `ros2-realtime-fix` (merged 2026-07-16). | Same as `ros2-realtime-fix` |
+| **`research/ros2-live-nosparsify-experiment`** | **Experiment** off `ros2-standard-interface`: disables `enable_backend_data_sparsify` to test whether live/bag APE can approach the file-mode baseline without deadlocking. Not merged back until the experiment concludes. | Same as `ros2-realtime-fix` |
 
-**Rules:** Do **not** merge core C++ patches from `ros2-realtime-fix` into `standard-env`. Wrapper/scripts/Eigen pin live on the runtime branch only.
+**Rules:**
+- Do **not** merge core C++ patches from `ros2-realtime-fix` (or its descendants) into `standard-env`. Wrapper/scripts/Eigen pin live on the runtime branches only.
+- Core correctness fixes (UB bugs, race conditions) land on `research/ros2-realtime-fix` first, then get merged forward into `research/ros2-standard-interface` and `research/ros2-live-nosparsify-experiment` — **not** the other way around, so the "frozen baseline" stays the single source of truth for core correctness.
+- ROS2 wrapper-interface improvements (launch files, live topics, parameters) land on `research/ros2-standard-interface` — per its own scope doc (`research/ROS2_STANDARD_INTERFACE.md`), backport to `research/ros2-realtime-fix` only once stable.
 
 ```bash
-git checkout research/standard-env          # reproduce Table V / locked metrics
-git checkout research/ros2-realtime-fix     # bag replay + stress tests
+git checkout research/standard-env                        # reproduce Table V / locked metrics
+git checkout research/ros2-realtime-fix                   # bag replay + stress tests (frozen baseline)
+git checkout research/ros2-standard-interface              # ros2 launch, live topics, ROS params
+git checkout research/ros2-live-nosparsify-experiment       # nosparsify accuracy experiment
 ```
 
 ---
