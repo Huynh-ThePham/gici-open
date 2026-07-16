@@ -12,7 +12,28 @@
     "no_timeout": true,
     "full_trajectory": true
   },
-  "validated": {
+  "validated_post_race_condition_fix_2026_07_17": {
+    "worktree": "standard-interface-wt (fresh worktree of research/ros2-standard-interface, after merging research/ros2-realtime-fix)",
+    "branch": "research/ros2-standard-interface",
+    "stress_suffix": "std_batch30_strict_postfix",
+    "date": "2026-07-17",
+    "runs": 30,
+    "all_strict_pass": "30/30",
+    "no_segfault": "30/30",
+    "full_trajectory": "30/30",
+    "ape_pos_ok": "30/30",
+    "ape_pos_min_m": 0.0769,
+    "ape_pos_max_m": 0.1918,
+    "ape_pos_mean_m": 0.1270,
+    "ape_pos_median_m": 0.1293,
+    "ape_rot_min_deg": 0.4346,
+    "ape_rot_max_deg": 0.8602,
+    "ape_rot_mean_deg": 0.5272,
+    "ape_rot_median_deg": 0.4894,
+    "failed_runs": [],
+    "notes": "All 4 previously-failing runs (007/009/013/024) now pass. Root cause: the original imu_state_mutex_ guard (bc3761c) only covered one estimator's states_ push/pop; promoted to EstimatorBase (estimator_state_mutex_, recursive) and extended to the ImuEstimatorBase cache, the covariances_ map, graph_->solve() vs concurrent reads, and every multi-threaded estimator's states_ shift -- see research/UPSTREAM_FIDELITY.md. Also fixed in this pass: the stress harness's segfault/sparsify checks used `rg`, which silently disappears from PATH once the ROS2 setup scripts are sourced -- every run in this batch actually had ~1700-2000 real 'Sparsifying measurements' log lines (backend-overload sparsify still happens under load, same as before) that the old rg-based check never saw; switched to grep."
+  },
+  "validated_pre_fix_2026_07_16": {
     "worktree": "gici_ros2_standard_interface",
     "branch": "research/ros2-standard-interface",
     "stress_suffix": "std_batch30_strict",

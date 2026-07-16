@@ -64,3 +64,4 @@ Live architecture: `ros2_wrapper/docs/ROS2_LIVE_NODE.md`
 | colcon build + smoke (topics + GPGGA) | verified |
 | UrbanNav std launch / topics | done (`ros_urbannav_live_rrr.yaml`, `launch_gici_live.sh urbannav`) |
 | Live node doc | `ros2_wrapper/docs/ROS2_LIVE_NODE.md` |
+| Real-time race-condition fix (merged from `research/ros2-realtime-fix`) | done — 30/30 strict-criteria stress pass on 2026-07-17 (was 26/30 pre-fix; the 4 failures, runs 007/009/013/024, no longer occur). See `research/baseline/realtime_strict_v1.json`. |
