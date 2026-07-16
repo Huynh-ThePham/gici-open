@@ -65,11 +65,17 @@ rclcpp::QoS buildStreamQos(
 
 RosStream::RosStream(
   rclcpp::Node::SharedPtr node, const NodeOptionHandlePtr& nodes, int istreamer) :
-  Streaming(), node_(node), frame_id_("World"), valid_(false)
+  // REP 105 names the world-fixed frame "map" (may jump, e.g. on an RTK
+  // fix/float transition -- unlike "odom", which must be continuous). The
+  // previous hardcoded "World" was not REP-105-compliant and was not
+  // configurable at all (only the child "subframe_id" was); overridable
+  // below via an optional `frame_id:` key.
+  Streaming(), node_(node), frame_id_("map"), valid_(false)
 {
   // Get streamer option
   const auto& streamer_node = nodes->streamers[istreamer];
   tag_ = streamer_node->tag;
+  option_tools::safeGet(streamer_node->this_node, "frame_id", &frame_id_);
   input_ros_stream_tag_.clear();
   for (const auto& input_tag : streamer_node->input_tags) {
     if (input_tag.substr(0, 4) != "str_") continue;
