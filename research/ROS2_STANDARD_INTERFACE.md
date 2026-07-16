@@ -1,8 +1,9 @@
 # ROS 2 standard interface research
 
-**Branch:** `research/ros2-standard-interface`  
-**Worktree:** `/home/theph/ws_ncs/gici_ros2_standard_interface`  
-**Base:** `research/ros2-realtime-fix` @ `realtime-safe-v1` (crash-safe bag replay)
+**Branch:** `research/ros2-standard-interface` (GitHub default branch — real-time primary)  
+**Worktree:** `/home/theph/ws_ncs/gici_research_standard` (main worktree)  
+**Base:** originally `research/ros2-realtime-fix` @ `realtime-safe-v1` (crash-safe bag replay);
+that branch was retired 2026-07-17 after merging into this one (see `research/README_ENV.md`).
 
 ## Goal
 
@@ -25,17 +26,22 @@ without changing the GICI fusion core (`src/`, `include/`).
 
 ## Reference branch
 
-Keep `research/ros2-realtime-fix` frozen as the validated runtime baseline.
-Merge interface improvements here first; backport only when stable.
+This branch is now the real-time primary (see `research/README_ENV.md`) — the earlier
+`research/ros2-realtime-fix` was retired after its correctness fixes were merged here.
+Core correctness fixes land here directly and merge forward into
+`research/ros2-live-nosparsify-experiment`.
 
-## Build (same as main worktree)
+## Build
 
 ```bash
-cd /home/theph/ws_ncs/gici_ros2_standard_interface/ros2_wrapper
+cd /home/theph/ws_ncs/gici_research_standard/ros2_wrapper   # main worktree
 source /opt/ros/humble/setup.bash
 colcon build --packages-select gici_ros2_msgs gici_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
+
+The `research/ros2-live-nosparsify-experiment` worktree remains at
+`/home/theph/ws_ncs/gici_ros2_standard_interface` for the nosparsify experiment.
 
 ## Quick start (this branch)
 
