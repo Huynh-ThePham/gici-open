@@ -353,6 +353,7 @@ void GnssDataIntegration::handleGNSS(const std::string& formator_tag,
   }
   ::free(rs); ::free(dts); ::free(var);
   ::free(rs_ssr); ::free(dts_ssr); ::free(var_ssr);
+  ::free(rs_prc); ::free(dts_prc); ::free(var_prc);
 
   // check number of satellites
   if (epoch.satellites.size() == 0) return;
