@@ -181,4 +181,4 @@ expiry, dose, redescending float (crash), and soft float (tail) all fail to
 remove the deep-urban horizontal tail. This vindicates the pre-registration
 discipline — a single-run claim from run1 would have been wrong — and
 definitively establishes the limit: the tail requires external NLOS scene
-information (Paper 2). This is the final result; the paper is method + boundary.
+information (the vision-NLOS follow-on). This is the final result; the paper is method + boundary.

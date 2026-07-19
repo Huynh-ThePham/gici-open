@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Paper 1 master reproduction launcher (file-mode, solo protocol).
+# Master reproduction launcher (file-mode, solo protocol).
 # Regenerates every number the paper reports, one gici_main at a time on an
 # otherwise-idle machine. RESUMABLE: any run whose solution.txt is already
 # complete is skipped, so a killed launcher can be relaunched, and today's

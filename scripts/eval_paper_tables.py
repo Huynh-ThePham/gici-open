@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate all Paper 1 tables from completed file-mode runs.
+"""Generate all study tables from completed file-mode runs.
 
 Tables:
   T1  covariance equivalence + cost (GICI-board 1.1 [vaar-fast]/[vaar-benchmark] log)
@@ -154,7 +154,7 @@ def main() -> int:
     dirs_fn = (lambda a, d: today_dirs(a, d)) if args.today else (lambda a, d: repro_dirs(root, a, d))
 
     report = {"tables": {}}
-    md = ["# Paper 1 tables (auto-generated)\n"]
+    md = ["# Study tables (auto-generated)\n"]
 
     # ---- T1: covariance equivalence + cost ----
     va_log = Path(args.va_log) if args.va_log else (

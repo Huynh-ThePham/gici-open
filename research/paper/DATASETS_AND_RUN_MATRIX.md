@@ -1,6 +1,6 @@
-# Paper 1 — finalized dataset set + full run matrix
+# Finalized dataset set + full run matrix (covariance/decision-layer study)
 
-*2026-07-19. What data the paper's numbers consume, what is on disk, what to download,
+*2026-07-19. What data the study's numbers consume, what is on disk, what to download,
 and the exact run matrix the master launcher (scripts/run_paper_all.sh) executes.*
 
 ## Dataset manifest (checked on disk 2026-07-19)
