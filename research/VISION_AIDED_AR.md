@@ -861,7 +861,7 @@ Cauchy is too gentle (2–3/70 residuals) to counter a majority-affected bias. u
 retained (VA-v4 underneath). **The in-estimator campaign is CLOSED** — gates → expiry →
 dose → Tukey-crash → Cauchy-tail all fail to remove the deep-urban horizontal tail. The
 only remaining route is external NLOS scene information (vision classification / 3DMA) =
-Paper 2 (research/paper2/PAPER2_SCOPE.md). Pre-registration + n=3 discipline vindicated:
+the vision-NLOS follow-on (research/VISION_NLOS.md). Pre-registration + n=3 discipline vindicated:
 a single-run claim from RF-Cauchy run1 would have been wrong.
 
 ## Out of scope

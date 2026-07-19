@@ -1,6 +1,7 @@
-# Paper 2 scope — Vision-based NLOS-aware GNSS float for deep-urban RTK
+# Vision-based NLOS-aware GNSS float for deep-urban RTK — scope
 
-*Created 2026-07-19. Motivated directly by Paper 1's proven boundary: the
+*Created 2026-07-19. Follow-on to the consistent-covariance/decision-layer study
+(research/VISION_AIDED_AR.md). Motivated directly by that study's proven boundary: the
 deep-urban horizontal error is a MAJORITY-affecting NLOS bias, invisible to every
 in-estimator mechanism operating on GNSS statistics (gates, constraint expiry,
 decision-confidence dose, per-residual float M-estimation). The only remaining
