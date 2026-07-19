@@ -10,22 +10,22 @@ lever is external scene information that identifies WHICH satellites are blocked
 ## Thesis
 
 The camera already onboard a tightly-coupled RTK/IMU/vision system can be used
-not only to aid the pose (Paper 1) but to **classify satellite lines-of-sight as
+not only to aid the pose (the covariance study) but to **classify satellite lines-of-sight as
 LOS/NLOS from scene geometry**, and this classification, applied to the GNSS
 float estimate upstream of ambiguity resolution, removes the horizontal tail that
-Paper 1 proved is out of reach of GNSS-statistics-only methods — while retaining
-Paper 1's vertical/yaw/availability gains (VA-v4 kept above it).
+the covariance study proved is out of reach of GNSS-statistics-only methods — while retaining
+the covariance study's vertical/yaw/availability gains (VA-v4 kept above it).
 
-## Why this is a distinct contribution (not a Paper 1 addendum)
+## Why this is a distinct contribution (not a mere addendum to the covariance study)
 
 - Requires a new information source (scene structure → per-satellite visibility),
-  not a reweighting of existing residuals. Paper 1 exhausted the latter.
+  not a reweighting of existing residuals. the covariance study exhausted the latter.
 - It is a system: camera–GNSS spatial + temporal registration to project
   satellite directions into the image, a sky/building classifier, and a fusion
   rule. Each is a design axis with its own validation.
-- Clean separation keeps both papers honest: Paper 1 = "what the covariance +
-  decision layer can and cannot do"; Paper 2 = "adding vision NLOS crosses the
-  boundary Paper 1 drew."
+- Clean separation keeps both studies honest: the covariance study = "what the covariance +
+  decision layer can and cannot do"; this study = "adding vision NLOS crosses the
+  boundary the covariance study drew."
 
 ## MVP (minimum to close ONE paper) — four blocks
 
@@ -41,7 +41,7 @@ Paper 1's vertical/yaw/availability gains (VA-v4 kept above it).
          small pretrained segmentation net run at low rate) → a per-azimuth
          elevation horizon; satellite is NLOS if its elevation < horizon(azimuth).
      (b) **semantic** — an off-the-shelf sky/building segmentation network.
-   - Caveat carried from Paper 1's honest style: the ZED2 is FORWARD-facing with a
+   - Caveat carried from the covariance study's honest style: the ZED2 is FORWARD-facing with a
      limited FOV, so only satellites roughly ahead are directly observable. For
      out-of-FOV satellites, fall back to elevation-only (no vision label). This
      partial-observability is itself a finding to characterize, not hide.
@@ -49,24 +49,24 @@ Paper 1's vertical/yaw/availability gains (VA-v4 kept above it).
 2. **Apply the label to the float, upstream of AR.**
    - NLOS-labeled satellites: down-weight (inflate measurement variance by a
      principled factor tied to expected multipath excess, or reject if confidently
-     NLOS). This is where Paper 1's finding bites: because the bias is
+     NLOS). This is where the covariance study's finding bites: because the bias is
      majority-affecting, *removing/deweighting the identified NLOS subset* is the
      move a per-residual robust loss could NOT make (it could not tell which were
      bad); the camera tells it which.
    - Keep the hard-threshold FDE and the consistent covariance path unchanged.
 
 3. **Keep VA-v4 above it.** Consistent real-time covariance + decision-confidence
-   fix weighting (Paper 1's recommended config) runs unchanged on top of the
+   fix weighting (the covariance study's recommended config) runs unchanged on top of the
    NLOS-cleaned float. The hypothesis is compositional: cleaner float → AR fixes
    anchored to unbiased states → no tail; VA-v4 still delivers u/yaw/fix.
 
 4. **Pre-registered Deep n=3 evaluation**, same protocol/integrity spine as
-   Paper 1 (raw ENU primary + ATE SE(3)/APE Sim(3) crosswalk; solo or paired;
+   the covariance study (raw ENU primary + ATE SE(3)/APE Sim(3) crosswalk; solo or paired;
    frozen bins). Target result: cut the horizontal tail (no run with d_h > +1.0 m
    vs baseline) AND retain u/yaw/fix. Attribution arms: vision-NLOS-only (no
-   VA-v4) and VA-v4-only (Paper 1) to separate contributions.
+   VA-v4) and VA-v4-only (the covariance study) to separate contributions.
 
-## Concrete first steps (when Paper 1 is submitted)
+## Concrete first steps (once the covariance study is submitted)
 
 - S1. Verify satellite az/el are accessible per-epoch at the estimator level and
   can be transformed into the camera frame (extrinsics + IMU attitude). Prototype
@@ -74,8 +74,8 @@ Paper 1's vertical/yaw/availability gains (VA-v4 kept above it).
   eyeball plausibility (sanity, GT-free).
 - S2. Implement the cheapest classifier (geometric skyline) first; log a per-epoch
   `[nlos] n_sat=.. n_labeled=.. n_nlos=..` mechanism check.
-- S3. Prereg PAPER2 H1 + frozen bins BEFORE any Deep accuracy run.
-- S4. Single exploratory Deep run (as in Paper 1's "one run first" discipline) to
+- S3. Prereg the vision-NLOS H1 + frozen bins BEFORE any Deep accuracy run.
+- S4. Single exploratory Deep run (as in the covariance study's "one run first" discipline) to
   confirm the classifier engages and nothing crashes; then n=3.
 
 ## Risks / honest priors
@@ -89,10 +89,10 @@ Paper 1's vertical/yaw/availability gains (VA-v4 kept above it).
   direction; MVP can use a fixed offset and note the sensitivity.
 - If even correct NLOS removal leaves a tail (e.g. diffraction/multipath from LOS
   satellites), that is the next boundary — but it would be a NEW finding beyond
-  Paper 1.
+  the covariance study.
 
 ## Relation to the other endorsed directions (kept separate)
 
-- Online temporal calibration (`td` state) — a distinct paper; feeds Paper 2's
+- Online temporal calibration (`td` state) — a distinct paper; feeds this study's
   projection accuracy but is not required for the MVP (fixed offset acceptable).
 - Continuous-time FGO — distinct paper; orthogonal to NLOS.
