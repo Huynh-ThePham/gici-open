@@ -167,6 +167,7 @@ void convert<std::string, EstimatorType>
   MAP_IN_OUT("spp_imu_camera_rrr", EstimatorType::SppImuCameraRrr);
   MAP_IN_OUT("dgnss_imu_camera_rrr", EstimatorType::DgnssImuCameraRrr);
   MAP_IN_OUT("rtk_imu_camera_rrr", EstimatorType::RtkImuCameraRrr);
+  MAP_IN_OUT("rtk_imu_camera_rrr_va", EstimatorType::RtkImuCameraRrrVa);
   MAP_IN_OUT("Ppp_imu_camera_rrr", EstimatorType::PppImuCameraRrr);
   LOG_INVALId;
 }
@@ -481,6 +482,9 @@ void loadOptions<AmbiguityResolutionOptions>(
   LOAD_COMMON(min_percentage_fixation_wl);
   LOAD_COMMON(min_percentage_fixation_uwl);
   LOAD_COMMON(ratio);
+  LOAD_COMMON(use_joint_cost_validation);
+  LOAD_COMMON(min_bootstrap_success_rate);
+  LOAD_COMMON(use_success_rate_fix_information);
 
   std::vector<std::string> system_excludes;
   bool has_glonass = false;
@@ -688,6 +692,9 @@ void loadOptions<GnssEstimatorBaseOptions>(
   LOAD_COMMON(reset_ambiguity_min_num_continuous_unfix);
   LOAD_COMMON(diverge_max_reject_ratio);
   LOAD_COMMON(diverge_min_num_continuous_reject);
+  LOAD_COMMON(margin_ambiguity_fix_constraints);
+  LOAD_COMMON(use_bounded_influence_gnss_loss);
+  LOAD_COMMON(use_cauchy_gnss_loss);
 
   if (checkSubOption(node, "gnss_common")) {
     YAML::Node subnode = node["gnss_common"];
@@ -877,6 +884,11 @@ void loadOptions<RtkImuCameraRrrEstimatorOptions>(
   LOAD_COMMON(min_yaw_std_init_visual);
   LOAD_COMMON(benchmark_joint_ambiguity_covariance);
   LOAD_COMMON(use_vision_aided_ambiguity_resolution);
+  LOAD_COMMON(ar_use_exact_joint_covariance);
+  LOAD_COMMON(ablate_reprojection_in_ar);
+  LOAD_COMMON(vision_ar_covariance_mix);
+  LOAD_COMMON(ar_use_delta_information);
+  LOAD_COMMON(ar_use_fast_marginal_covariance);
 }
 
 template <>

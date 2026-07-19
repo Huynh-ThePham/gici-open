@@ -354,6 +354,7 @@ def run_once(
         )
         drain = int(os.environ.get("RRR_DRAIN_SECONDS", "20"))
         time.sleep(drain)
+        node_forced_kill = False
         node_proc.send_signal(signal.SIGINT)
         for _ in range(60):
             if node_proc.poll() is not None:
@@ -361,6 +362,8 @@ def run_once(
             time.sleep(0.5)
         if node_proc.poll() is None:
             node_proc.kill()
+            node_forced_kill = True
+        node_returncode = node_proc.wait(timeout=5)
     runtime_s = time.time() - t0
     ended_at = utc_now()
 
@@ -387,12 +390,16 @@ def run_once(
         play.returncode == 0
         and gpgga >= 500
         and not log_stats.get("node_crashed", False)
+        and log_stats.get("node_clean_exit", False)
+        and not node_forced_kill
         and eval_ok
     )
     if not run_ok:
         print(
             f"[baseline-repeat] WARNING incomplete run_{run_idx:02d}: "
-            f"gpgga={gpgga} crashed={log_stats.get('node_crashed')} eval_ok={eval_ok}",
+            f"gpgga={gpgga} crashed={log_stats.get('node_crashed')} "
+            f"clean_exit={log_stats.get('node_clean_exit')} "
+            f"forced_kill={node_forced_kill} eval_ok={eval_ok}",
             file=sys.stderr,
         )
 
@@ -421,6 +428,8 @@ def run_once(
         "random_seed_note": "Deterministic offline replay; no explicit RNG seed is configured.",
         "rate": rate,
         "bag_play_exit_code": play.returncode,
+        "node_exit_code": node_returncode,
+        "node_forced_kill": node_forced_kill,
         "evaluation_ok": eval_ok,
         "run_ok": run_ok,
         "ape_position_rmse_m": ape_metrics.get("ape_translation_rmse_m"),

@@ -38,6 +38,7 @@
 .Python
 env/
 build/
+build_asan/
 dist/
 *.log
 

@@ -56,6 +56,14 @@ while kill -0 "$GICI_PID" 2>/dev/null; do
   fi
   sleep 2
 done
+# Upstream gici_main may ignore SIGINT after completion (known hang); the solution
+# is already complete and stable here, so escalate after a grace period. Keeps the
+# unattended master launcher (scripts/run_paper_all.sh) from stalling.
+for _ in $(seq 1 15); do
+  kill -0 "$GICI_PID" 2>/dev/null || break
+  sleep 2
+done
+kill -9 "$GICI_PID" 2>/dev/null || true
 wait "$GICI_PID" 2>/dev/null || true
 
 if [[ ! -s "$OUT_SOLUTION" ]]; then

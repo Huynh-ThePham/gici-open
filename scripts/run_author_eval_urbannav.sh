@@ -117,6 +117,19 @@ def count_gga(path: Path) -> int:
             n += 1
     return n
 
+def detect_algorithm(solution: Path, default: str = "rtk_imu_camera_rrr") -> str:
+    # Read the estimator type from the run_config.yaml that produced this solution rather
+    # than hardcoding it, so a VA (or any other) estimator is never mislabeled as the
+    # baseline in the emitted metrics. Walk up a few levels to find the config.
+    for base in [solution.parent, solution.parent.parent, solution.parent.parent.parent]:
+        cfg = base / "run_config.yaml"
+        if cfg.exists():
+            m = re.search(r"^\s*type:\s*(rtk_imu_camera_rrr\w*)\s*$",
+                          cfg.read_text(errors="ignore"), re.MULTILINE)
+            if m:
+                return m.group(1)
+    return default
+
 pos_rmse = parse_rmse(eval_dir / "ape_translation.txt")
 rot_rmse = parse_rmse(eval_dir / "ape_rotation.txt")
 expected = json.loads(expected_path.read_text())
@@ -131,7 +144,7 @@ locked = expected.get(locked_key) if locked_key else None
 
 metrics = {
     "dataset": f"urbannav_{dataset}",
-    "algorithm": "rtk_imu_camera_rrr",
+    "algorithm": detect_algorithm(solution),
     "pipeline": "author_readme4_interp_gt_full",
     "solution_gpgga_epochs": count_gga(solution),
     "ape_translation_rmse_m": pos_rmse,

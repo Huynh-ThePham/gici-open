@@ -9,13 +9,11 @@ UPSTREAM="${GICI_UPSTREAM_REF:-f2b8579}"
 
 # Each entry must be a memory-safety/UB fix only. Document the reason here and
 # in the commit message. A file only "counts" if it actually shows up in the
-# diff, so branch-specific entries (e.g. the realtime mutex guard, which only
-# exists on research/ros2-realtime-fix) are harmless to list unconditionally.
+# diff. Keep this list narrow: file-wide allowlisting can hide algorithm changes.
 ALLOWED_DELTA=(
   "src/stream/data_integration.cpp"     # free rs_prc/dts_prc/var_prc (leak)
   "src/stream/formator.cpp"             # guard eph.sat / geph prn bounds before nav.eph[]/nav.geph[] index (heap-buffer-underflow segfault)
   "src/fusion/gnss_imu_initializer.cpp" # guard empty deque before front()/back() (heap-use-after-free)
-  "src/fusion/rtk_imu_camera_rrr_estimator.cpp" # imu_state_mutex_ guard for the real-time (multi-thread) path -- research/ros2-realtime-fix only
 )
 
 cd "$ROOT"

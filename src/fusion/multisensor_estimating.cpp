@@ -19,6 +19,7 @@
 #include "gici/fusion/rtk_imu_tc_estimator.h"
 #include "gici/fusion/gnss_imu_camera_srr_estimator.h"
 #include "gici/fusion/rtk_imu_camera_rrr_estimator.h"
+#include "gici/fusion/rtk_imu_camera_rrr_va_estimator.h"
 
 namespace gici {
 
@@ -304,7 +305,8 @@ MultiSensorEstimating::MultiSensorEstimating(
     visual_estimator->setFeatureHandler(feature_handler_);
   }
   // RTK/IMU/Camera tightly integration
-  else if (type_ == EstimatorType::RtkImuCameraRrr)
+  else if (type_ == EstimatorType::RtkImuCameraRrr ||
+           type_ == EstimatorType::RtkImuCameraRrrVa)
   {
     YAML::Node rtk_imu_camera_rrr_node = node["rtk_imu_camera_rrr_options"];
     if (rtk_imu_camera_rrr_node.IsDefined()) {
@@ -335,9 +337,15 @@ MultiSensorEstimating::MultiSensorEstimating(
     }
 
     feature_handler_.reset(new FeatureHandler(feature_handler_options_, imu_base_options_));
-    estimator_.reset(new RtkImuCameraRrrEstimator(rtk_imu_camera_rrr_options_, 
-      gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_, 
-      visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    if (type_ == EstimatorType::RtkImuCameraRrrVa) {
+      estimator_.reset(new RtkImuCameraRrrVaEstimator(rtk_imu_camera_rrr_options_,
+        gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_,
+        visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    } else {
+      estimator_.reset(new RtkImuCameraRrrEstimator(rtk_imu_camera_rrr_options_,
+        gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_,
+        visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    }
     std::shared_ptr<VisualEstimatorBase> visual_estimator = 
       std::dynamic_pointer_cast<VisualEstimatorBase>(estimator_);
     CHECK_NOTNULL(visual_estimator);
@@ -459,12 +467,19 @@ void MultiSensorEstimating::resetProcessors()
     visual_estimator->setFeatureHandler(feature_handler_);
   }
   // RTK/IMU/Camera tightly integration
-  else if (type_ == EstimatorType::RtkImuCameraRrr)
+  else if (type_ == EstimatorType::RtkImuCameraRrr ||
+           type_ == EstimatorType::RtkImuCameraRrrVa)
   {
     feature_handler_.reset(new FeatureHandler(feature_handler_options_, imu_base_options_));
-    estimator_.reset(new RtkImuCameraRrrEstimator(rtk_imu_camera_rrr_options_, 
-      gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_, 
-      visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    if (type_ == EstimatorType::RtkImuCameraRrrVa) {
+      estimator_.reset(new RtkImuCameraRrrVaEstimator(rtk_imu_camera_rrr_options_,
+        gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_,
+        visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    } else {
+      estimator_.reset(new RtkImuCameraRrrEstimator(rtk_imu_camera_rrr_options_,
+        gnss_imu_init_options_, rtk_options_, gnss_base_options_, gnss_loose_base_options_,
+        visual_estimator_base_options_, imu_base_options_, base_options_, ambiguity_options_));
+    }
     std::shared_ptr<VisualEstimatorBase> visual_estimator = 
       std::dynamic_pointer_cast<VisualEstimatorBase>(estimator_);
     CHECK_NOTNULL(visual_estimator);

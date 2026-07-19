@@ -138,7 +138,7 @@ sol_span = max(0.0, sol_end - sol_start)
 end_gap = drive_end - sol_end
 
 # Allow visual/GNSS initialization to delay the first solution, but do not allow
-# a short early abort to masquerade as a completed canonical run.
+# a short early node failure to masquerade as a completed canonical run.
 min_span_ratio = 0.85
 max_end_gap_s = 75.0
 ok = drive_span > 0.0 and sol_span >= drive_span * min_span_ratio and end_gap <= max_end_gap_s
@@ -151,7 +151,7 @@ print(
 if not ok:
     print(
         "[rrr] ERROR: canonical solution is incomplete; refusing to treat "
-        "node abort as harmless.",
+        "node failure as a completed run.",
         file=sys.stderr,
     )
     sys.exit(4)
@@ -323,12 +323,16 @@ if [[ "${PLAYER_STATUS}" -ne 0 && "${STOPPED_PLAYER_AFTER_NODE_DIED}" -eq 0 ]]; 
 fi
 if [[ "${NODE_DIED}" -ne 0 ]]; then
   EPOCHS="$(solution_epochs)"
-  if grep -q "Check failed: seq.size() > 1" "${OUT_DIR}/node.log" 2>/dev/null && validate_solution_complete; then
-    echo "[rrr] Known upstream teardown CHECK after full solution (harmless); ${EPOCHS} epochs written."
+  if grep -q "Check failed: seq.size() > 1" "${OUT_DIR}/node.log" 2>/dev/null; then
+    if validate_solution_complete; then
+      echo "[rrr] gici_ros2_main hit upstream teardown CHECK after ${EPOCHS} epochs; treating node failure as invalid baseline run." >&2
+    else
+      echo "[rrr] gici_ros2_main hit upstream teardown CHECK and the solution is incomplete." >&2
+    fi
   else
     echo "[rrr] gici_ros2_main exited during playback; see ${OUT_DIR}/node.log" >&2
-    exit 1
   fi
+  exit 1
 else
   validate_solution_complete
 fi

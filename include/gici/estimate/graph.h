@@ -42,6 +42,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 
 #pragma diagnostic push
@@ -155,14 +156,64 @@ public:
    *        columns are simply not accumulated. This is an approximation (not the
    *        exact joint-graph covariance), and does not apply loss-function
    *        robustification (same simplification as getLhs()).
+   *        The marginalization prior (kMarginalizationError) is always excluded: it
+   *        summarizes already-marginalized PAST states, so folding it into a current-
+   *        epoch local information matrix would conflate accumulated history with the
+   *        current measurement.
    * @param[in] parameter_block_ids The blocks to include, in the order their rows/
    *            columns should appear in the output.
    * @param[out] information The local information matrix (sum of minimalDimension()
    *             over parameter_block_ids, square), block-ordered to match the input.
+   * @param[in] exclude_reprojection If true, also skip reprojection residuals
+   *            (kReprojectionError). Used ONLY for the vision-ablation control
+   *            experiment (research/VISION_AIDED_AR.md): including the camera-keyframe
+   *            pose chain but withholding its visual constraint, to isolate whether an
+   *            observed accuracy gain comes from genuine visual information or merely
+   *            from adding more marginalized blocks. Default false.
    * @return True if all requested blocks exist in the graph.
    */
   bool getLocalCrossInformation(
-      const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information);
+      const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information,
+      bool exclude_reprojection = false);
+
+  /**
+   * @brief research/vision-aided-ambiguity-resolution: compute the EXACT (for the current
+   *        linearization) marginal covariance of a set of ambiguity parameter blocks,
+   *        Q_aa = [H_active^{-1}]_aa, where H_active is the full active-window information
+   *        in minimal/tangent coordinates -- including the marginalization prior -- and
+   *        every non-ambiguity active state (poses, speed/bias, clock/frequency, tropo/
+   *        iono, extrinsics, visual landmarks, and the prior's boundary states) is
+   *        MARGINALIZED (Schur complement), NOT conditioned/held-fixed.
+   *
+   *        This is the same quantity ceres::Covariance (computeCovariance) returns for the
+   *        ambiguity blocks, but computed by exploiting factor-graph sparsity: assemble the
+   *        loss-corrected Gauss-Newton information H = [[H_aa, H_am],[H_ma, H_mm]] over
+   *        [ambiguities | all other active blocks], then Q_aa = (H_aa - H_am H_mm^{-1}
+   *        H_ma)^{-1} via a sparse Cholesky factorization of the structured H_mm. Cost is
+   *        bounded by the sliding-window size (not the trajectory length), so the
+   *        statistically consistent covariance is usable at every AR epoch in real time --
+   *        unlike computeCovariance's whole-problem QR/SVD (hundreds of ms once the window
+   *        fills, see research/VISION_AIDED_AR.md).
+   *
+   *        Unlike getLocalCrossInformation (which conditions out-of-set blocks by dropping
+   *        the -H_am H_mm^{-1} H_ma term -> overconfident), this marginalizes them exactly,
+   *        so the result is consistent (marginal covariance >= conditional covariance).
+   *        The loss-function (Huber/Cauchy) robustification IS applied (BANS Eq. 11), to
+   *        match the robustified Hessian ceres uses.
+   *
+   * @param[in]  ambiguity_ids The ambiguity parameter blocks, in the row/col order the
+   *             output should follow (matches the ids passed to AmbiguityResolution).
+   * @param[out] Q_aa The marginal ambiguity covariance (symmetric positive-definite).
+   * @param[out] fail_reason Optional: on a false return, a short tag naming the abstention
+   *             point (diagnostics/logging only; does not affect behavior).
+   * @return True on success; false (caller must fall back -- never a fabricated matrix) if
+   *         a requested block is absent, the nuisance system is not resolvable at
+   *         normal-equations precision, or the reduced ambiguity information is not
+   *         positive-definite.
+   */
+  bool getMarginalAmbiguityCovariance(
+      const std::vector<uint64_t>& ambiguity_ids, Eigen::MatrixXd& Q_aa,
+      std::string* fail_reason = nullptr);
 
   /// @name add/remove
   /// @{
@@ -435,9 +486,11 @@ public:
     Solve(options, problem_.get(), &summary);
   }
 
-  // Get covariance estimation of given parameter blocks
-  // Enabling dense_svd can make this function handle rank deficient problem, 
-  // but the computational load will be comparably high.
+  // Get covariance estimation of given parameter blocks.
+  // The default path tries sparse QR first, then falls back to dense SVD if the
+  // full problem is numerically rank deficient (e.g. gauge/null-space modes).
+  // Passing use_dense_svd=true skips QR and directly computes the Moore-Penrose
+  // covariance, which is slower but handles rank deficiency explicitly.
   bool computeCovariance(const std::vector<uint64_t>& parameter_block_ids,
                          Eigen::MatrixXd& covariance,
                          bool use_dense_svd = false);

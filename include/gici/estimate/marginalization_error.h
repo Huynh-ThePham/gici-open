@@ -278,6 +278,32 @@ public:
         != parameter_block_id_to_parameter_block_info_idx_.end();
   }
 
+  /**
+   * @brief research/vision-aided-ambiguity-resolution: expose the prior's information
+   *        matrix and the minimal-coordinate ordering of its non-fixed parameter blocks.
+   *
+   *        The returned matrix is Lambda = J_^T * J_ -- exactly the (positive-semidefinite)
+   *        information this residual contributes to the Ceres linear system, in the same
+   *        minimal/tangent coordinates as every other residual's minimal Jacobian. Its
+   *        rows/cols are laid out by each block's `ordering_idx` with width
+   *        `minimal_dimension`, so a caller assembling the active graph's total information
+   *        (for a marginal covariance) can scatter Lambda's blocks directly by parameter
+   *        block id, WITHOUT routing this dynamically-sized residual through a generic
+   *        per-residual evaluation buffer (which is fragile and has caused heap overflows;
+   *        see research/VISION_AIDED_AR.md). Read-only; requires updateErrorComputation()
+   *        to have run (it always has by AR time, since the graph has been solved).
+   * @param[out] parameter_block_ids Non-fixed prior blocks, in ordering.
+   * @param[out] minimal_offsets     Start row/col of each block in `information`.
+   * @param[out] minimal_dimensions  Width of each block in `information`.
+   * @param[out] information         Lambda = J_^T * J_ (symmetric PSD).
+   * @return True if the prior's linearized system is available.
+   */
+  bool marginalizationInformation(
+      std::vector<uint64_t>& parameter_block_ids,
+      std::vector<size_t>& minimal_offsets,
+      std::vector<size_t>& minimal_dimensions,
+      Eigen::MatrixXd& information) const;
+
 protected:
   Graph* graph_; ///< The underlying graph.
   ceres::ResidualBlockId residual_block_id_; ///< The residual block id of this.

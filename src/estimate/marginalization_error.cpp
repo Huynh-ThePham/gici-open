@@ -944,6 +944,46 @@ void MarginalizationError::updateErrorComputation()
   error_computation_valid_ = true;
 }
 
+// research/vision-aided-ambiguity-resolution: read-only accessor exposing the prior's
+// information matrix Lambda = J_^T * J_ (the exact quantity the Ceres linear system sees
+// from this residual) and the minimal-coordinate ordering of its non-fixed parameter
+// blocks. See the header for why this exists (safe assembly of the active graph's
+// information without the fragile dynamic-buffer evaluation path).
+bool MarginalizationError::marginalizationInformation(
+    std::vector<uint64_t>& parameter_block_ids,
+    std::vector<size_t>& minimal_offsets,
+    std::vector<size_t>& minimal_dimensions,
+    Eigen::MatrixXd& information) const
+{
+  // updateErrorComputation() must have populated J_ (it runs before every optimization,
+  // so J_ is valid by ambiguity-resolution time). If not available, signal failure so the
+  // caller falls back rather than using a stale/empty prior.
+  if (!error_computation_valid_) return false;
+  if (J_.rows() == 0 || J_.cols() == 0) return false;
+
+  // Lambda = J_^T J_ is exactly the (rank-truncated, PSD) information Ceres accumulates
+  // from this residual -- identical to what ceres::Covariance factors -- rather than the
+  // raw pre-truncation H_. Symmetrize to remove finite-precision asymmetry.
+  information.noalias() = J_.transpose() * J_;
+  information = 0.5 * (information + information.transpose());
+
+  parameter_block_ids.clear();
+  minimal_offsets.clear();
+  minimal_dimensions.clear();
+  const size_t dim = static_cast<size_t>(information.cols());
+  for (const auto& info : parameter_block_infos_) {
+    // Blocks fixed at marginalization time collapse to minimal_dimension 0 and occupy no
+    // columns of J_/H_; skip them (they carry no information here).
+    if (info.minimal_dimension == 0) continue;
+    // Defensive bounds check: ordering must index into Lambda.
+    if (info.ordering_idx + info.minimal_dimension > dim) return false;
+    parameter_block_ids.push_back(info.parameter_block_id);
+    minimal_offsets.push_back(info.ordering_idx);
+    minimal_dimensions.push_back(info.minimal_dimension);
+  }
+  return true;
+}
+
 // Computes the linearized deviation from the references (linearization points)
 bool MarginalizationError::computeDeltaChi(Eigen::VectorXd& DeltaChi) const {
   DeltaChi.resize(H_.rows());

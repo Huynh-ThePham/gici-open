@@ -33,12 +33,12 @@ GICI-board lever arms; not from upstream).
 | I/O / stream layout | `option/post_estimation_RTK_RRR_rinex_imutext.yaml` | `research/config/rtk_imu_camera_rrr_urbannav.yaml` (`stream:`) |
 | Estimator / calib | `ros_wrapper/src/gici/option/ros_urbannav.yaml` (RRR block, lines 395–518) | same file (`estimate:`) |
 
-Template SHA256 (lock reference, `research/standard-env` branch tip — updated after
-the RRR estimator tuning commit; the old `e7eb80e6...` hash matched only the retired
-truncated-run Medium figure, not the current Deep lock or any full-trajectory number):
+Template SHA256 (lock reference, updated after adding an explicit baseline guard
+`use_vision_aided_ambiguity_resolution: false`; estimator semantics remain
+`rtk_imu_camera_rrr`):
 
 ```text
-research/config/rtk_imu_camera_rrr_urbannav.yaml  d8250202c7a878375fd9b33270f1b646fea286905e506f018b86967e9a55d271
+research/config/rtk_imu_camera_rrr_urbannav.yaml  df1aab2034151e6de862547555e164442e033a8d3d4df7284f9e95735b163643
 option/post_estimation_RTK_RRR_rinex_imutext.yaml adcccd0e0a0c48383ad5761158bd7d363d339180e22136910d67e49e3a86a947
 ros_wrapper/src/gici/option/ros_urbannav.yaml      c0ac1cb8521497952c142288d9455eaa093351b4997c9d4912d2641d96c2c465
 ```
@@ -47,7 +47,9 @@ Machine-readable copy: `research/baseline/filemode_urbannav_rrr_v1.json`.
 
 ## Dataset inputs (session-aligned, author GNSS base)
 
-Environment: `URBANNAV_DATA_ROOT` (default `~/Downloads/UrbanNavDataset-master`).
+Environment: `URBANNAV_DATA_ROOT` overrides dataset discovery. Without it, the runner
+checks `/media/theph/Data1/Research/dataset/UrbanNavDataset` and then
+`/media/theph/Data1/Research/dataset`.
 
 ### Medium — `UrbanNav-HK-Medium-Urban-1`
 
@@ -145,8 +147,8 @@ gap (early vertical bias, see `research/AUTHOR_METHODOLOGY.md`), not non-determi
 
 ## Operational notes
 
-- **Exit codes:** `gici_main` may exit `-6` / `134` (upstream teardown `CHECK`) after
-  the solution file is fully written. Whitelisted in `run_urbannav_rrr_baseline.py`.
+- **Exit codes:** crash and timeout exits are failures. The runner accepts only clean
+  exit or its own SIGINT watchdog after the minimum full-trajectory GPGGA count is met.
 - **Output rate:** estimator writes ~10 Hz (`output_align_tag: str_imu_file`,
   `output_downsample_rate: 40`). Author eval interpolates GT to solution rate.
 - **Replay:** `replay.enable: true`, `speed: 1.0` — pseudo-real-time post-file.

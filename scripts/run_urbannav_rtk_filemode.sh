@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # UrbanNav GNSS-only RTK in post-processing FILE mode (author's actual run method).
 #
-# Produces the FULL trajectory (unlike the ROS 2 streaming path, which segfaults
-# after the first epoch on the f2b8579 core). The run aborts at the very end on the
-# known upstream teardown CHECK; that is expected and harmless because solution.txt
-# is already fully written (exit -6/134/124/130 are tolerated, matching
-# scripts/run_urbannav_rrr_baseline.py).
+# Produces the FULL trajectory. Crash and timeout exits are treated as failures; do
+# not use partial solution files as locked results.
 #
 # Usage: scripts/run_urbannav_rtk_filemode.sh [medium|deep]
 set -uo pipefail
@@ -49,11 +46,15 @@ sed -e "s#<ROVER_OBS>#${ROVER}#g" \
     "${TEMPLATE}" > "${CFG}"
 
 echo "[filemode] config: ${CFG}"
-echo "[filemode] running ${GICI_MAIN} (teardown abort is expected) ..."
+echo "[filemode] running ${GICI_MAIN} ..."
 rm -f "${OUT_DIR}/solution.txt"
 "${GICI_MAIN}" "${CFG}" > "${OUT_DIR}/run.log" 2>&1
 code=$?
-echo "[filemode] gici_main exit=${code} (0 clean; -6/134 = known upstream teardown abort)"
+echo "[filemode] gici_main exit=${code}"
+if [[ "${code}" -ne 0 ]]; then
+  echo "[filemode] ERROR: gici_main failed; see ${OUT_DIR}/run.log" >&2
+  exit "${code}"
+fi
 
 if [[ -s "${OUT_DIR}/solution.txt" ]]; then
   echo "[filemode] solution: ${OUT_DIR}/solution.txt"

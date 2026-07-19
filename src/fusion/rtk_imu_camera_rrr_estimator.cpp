@@ -142,9 +142,16 @@ bool RtkImuCameraRrrEstimator::addGnssMeasurementAndState(
   GnssMeasurementDDIndexPairs code_index_pairs = gnss_common::formPseudorangeDDPair(
     curGnssRov(), curGnssRef(), system_to_base_prn, gnss_base_options_.common);
 
-  // Cycle-slip detection
-  if (!isFirstEpoch()) {
-    cycleSlipDetectionSD(lastGnssRov(), lastGnssRef(), 
+  // Cycle-slip detection.
+  // Guard on the GNSS history deque size, not isFirstEpoch(): isFirstEpoch() checks
+  // states_.size() (which also counts camera keyframes), but lastGnssRov()/lastGnssRef()
+  // read getLast(gnss_measurement_pairs_) which requires >= 2 GNSS epochs. During an
+  // extended total GNSS outage (e.g. UrbanNav Deep) the GNSS deque can shrink to one
+  // entry while states_ still holds >= 2 (camera) states -- the pre-existing guard then
+  // passed and getLast()'s CHECK(size > 1) aborted the process. With < 2 GNSS epochs of
+  // history there is simply no previous epoch to difference against, so skip cycle-slip.
+  if (gnss_measurement_pairs_.size() > 1) {
+    cycleSlipDetectionSD(lastGnssRov(), lastGnssRef(),
       curGnssRov(), curGnssRef(), gnss_base_options_.common);
   }
 
@@ -193,8 +200,16 @@ bool RtkImuCameraRrrEstimator::addGnssMeasurementAndState(
   addDopplerResidualBlocks(curGnssRov(), states_[index], num_valid_satellite, 
     false, getImuMeasurementNear(timestamp).angular_velocity);
 
-  // Add relative errors
-  if (lastGnssState().valid()) {  // maybe invalid here because of long term GNSS absent
+  // Add relative errors.
+  // Same history-deque guard as cycle-slip above: the relative-ambiguity block reads
+  // getLast(gnss_measurement_pairs_) and getLast(ambiguity_states_), both requiring
+  // >= 2 GNSS epochs. lastGnssState().valid() alone is insufficient (it can find a
+  // pre-outage valid state while the GNSS deques have already shrunk to one entry),
+  // which crashed on UrbanNav Deep's total-outage segment. With no previous GNSS epoch
+  // to relate to, the current ambiguities are effectively new (a full cycle slip across
+  // the outage), so skipping the relative constraints is also the correct behavior.
+  if (lastGnssState().valid() && gnss_measurement_pairs_.size() > 1 &&
+      ambiguity_states_.size() > 1) {
     // frequency
     addRelativeFrequencyResidualBlock(lastGnssState(), states_[index]);
     // ambiguity
@@ -359,6 +374,7 @@ bool RtkImuCameraRrrEstimator::estimate()
       rejectDopplerOutlier(states_[latest_state_index_]);
       rejectPhaserangeOutlier(states_[latest_state_index_], curAmbiguityState());
     }
+    logBoundedInfluenceStats(states_[latest_state_index_]);
 
     // Check if we rejected too many GNSS residuals
     double ratio_pseudorange = n_pseudorange == 0.0 ? 0.0 : 1.0 - 
@@ -883,20 +899,31 @@ void RtkImuCameraRrrEstimator::benchmarkJointAmbiguityCovariance(const State& st
 
 // Vision-aided ambiguity resolution: see RtkImuCameraRrrEstimatorOptions::
 // use_vision_aided_ambiguity_resolution and research/VISION_AIDED_AR.md.
+//
+// Double-counting fix (2026-07-17): the previous version added the shadow-estimator's
+// ambiguity information on top of the local ambiguity block (fused_aa = L_aa + S). But
+// the shadow's 2-epoch window and the local matrix's L_aa BOTH contain the *current*
+// epoch's GNSS DD phase/code information (same physical observations, re-instantiated in
+// two graphs), so the shared measurement was counted twice -- inflating ambiguity
+// confidence and biasing the ratio test toward accepting marginal (possibly wrong)
+// fixes. This is the leading suspected cause of the GICI-board 3.1 rotation regression.
+//
+// This version uses the local joint information alone (each current-epoch measurement
+// used exactly once) and marginalizes pose/speed-and-bias out of it. When the current
+// epoch under-constrains some direction, it returns false and the caller falls back to
+// the plain GNSS-only shadow covariance -- rather than fabricating confidence by
+// double-counting.
 bool RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance(
   const State& state, Eigen::MatrixXd& covariance)
 {
-  // Start from the existing shadow-estimator covariance (GNSS-only, no cross-sensor
-  // information) -- this is what the plain AR path uses today.
-  Eigen::MatrixXd shadow_covariance;
-  if (!estimateAmbiguityCovariance(state, shadow_covariance)) return false;
-  const int num_ambiguities = static_cast<int>(shadow_covariance.rows());
+  // Ambiguity count / ordering source: identical to estimateAmbiguityCovariance() and
+  // the AR call site (all iterate curAmbiguityState().ids), so the returned covariance's
+  // row/col order matches the ids passed to solveRtk().
+  const int num_ambiguities = static_cast<int>(curAmbiguityState().ids.size());
   if (num_ambiguities == 0) return false;
 
   // Build the local-cross-information parameter set: ambiguities + current pose +
-  // speed-and-bias (if resolvable). Order must match shadow_covariance's ambiguity
-  // ordering, i.e. curAmbiguityState().ids (both this function and
-  // estimateAmbiguityCovariance() iterate it the same way).
+  // speed-and-bias (if resolvable).
   std::vector<uint64_t> parameter_block_ids;
   for (auto id : curAmbiguityState().ids) {
     if (!graph_->parameterBlockExists(id.asInteger())) return false;
@@ -910,40 +937,36 @@ bool RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance(
     parameter_block_ids.push_back(speed_and_bias_id.asInteger());
   }
 
+  // Local joint information over [ambiguities, pose, speed-and-bias] from the CURRENT
+  // epoch's residuals in the tightly-coupled graph (DD phase/code coupling ambiguities
+  // to pose; IMU pre-integration + reprojection constraining pose/velocity), each
+  // physical measurement used exactly once. NO shadow-estimator term is added -- doing
+  // so double-counts the current epoch's GNSS information already present here.
   Eigen::MatrixXd local_information;
   if (!graph_->getLocalCrossInformation(parameter_block_ids, local_information)) {
     return false;
   }
 
-  // The shadow covariance must itself be well-conditioned enough to invert into an
-  // information matrix.
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> shadow_es(
-    shadow_covariance, Eigen::EigenvaluesOnly);
-  if (shadow_es.eigenvalues().minCoeff() < 1e-12) return false;
-  Eigen::MatrixXd shadow_information = shadow_covariance.inverse();
-
-  // Fuse: add the shadow-estimator's (ambiguity-only) information into the
-  // top-left [ambiguity x ambiguity] block of the local cross-information matrix.
-  // The pose/speed-and-bias directions, and their cross terms with ambiguities, are
-  // left exactly as computed by getLocalCrossInformation() -- the shadow estimator
-  // has no information about them at all (it is a GNSS-only shadow graph).
-  Eigen::MatrixXd fused_information = local_information;
-  fused_information.topLeftCorner(num_ambiguities, num_ambiguities) += shadow_information;
-
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> fused_es(fused_information);
-  if (fused_es.info() != Eigen::Success || fused_es.eigenvalues().minCoeff() < 1e-9) {
+  // The full local information must be well-conditioned enough to invert. When the
+  // current epoch alone under-constrains some direction (empirically ~45% of epochs --
+  // e.g. an ambiguity just added with no phase observation yet, or an attitude component
+  // needing multi-epoch IMU integration to become observable), bail out and let the
+  // caller fall back to the plain GNSS-only shadow covariance.
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(local_information);
+  if (es.info() != Eigen::Success || es.eigenvalues().minCoeff() < 1e-9) {
     return false;
   }
-  Eigen::MatrixXd fused_covariance = fused_es.eigenvectors()
-    * fused_es.eigenvalues().cwiseInverse().asDiagonal()
-    * fused_es.eigenvectors().transpose();
+  Eigen::MatrixXd local_covariance = es.eigenvectors()
+    * es.eigenvalues().cwiseInverse().asDiagonal()
+    * es.eigenvectors().transpose();
 
-  // The ambiguity marginal covariance after properly accounting for its correlation
-  // with the tightly-coupled pose/speed-and-bias state (a Schur-complement effect --
-  // the actual mechanism through which visual/IMU information reshapes the
-  // ambiguity uncertainty used for AR, rather than treating position as if known
-  // exactly the way the plain shadow-estimator covariance implicitly does).
-  covariance = fused_covariance.topLeftCorner(num_ambiguities, num_ambiguities);
+  // Marginal ambiguity covariance: pose/speed-and-bias integrated out via the full-
+  // matrix inverse + top-left block, i.e. the ambiguity uncertainty after accounting
+  // for its correlation with the tightly-coupled pose/speed-and-bias state. This is the
+  // mechanism through which IMU/pose (and, indirectly through the IMU chain, visual)
+  // information reshapes the ambiguity uncertainty used for AR -- rather than treating
+  // position as if known exactly the way the plain shadow covariance implicitly does.
+  covariance = local_covariance.topLeftCorner(num_ambiguities, num_ambiguities);
   return true;
 }
 

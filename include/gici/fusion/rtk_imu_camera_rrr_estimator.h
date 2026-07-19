@@ -41,15 +41,59 @@ struct RtkImuCameraRrrEstimatorOptions {
   // baselines are unaffected.
   bool benchmark_joint_ambiguity_covariance = false;
 
-  // Vision-aided ambiguity resolution (research/vision-aided-ambiguity-resolution):
-  // when true, the ambiguity covariance actually used for AR is the GNSS-only
-  // shadow-estimator covariance *fused* (information-form addition + Schur
-  // complement) with the current epoch's local cross-information between
-  // ambiguities and the tightly-coupled pose/speed-and-bias state -- see
-  // research/VISION_AIDED_AR.md. Falls back to the plain shadow covariance if
-  // fusion fails (e.g. a singular fused information matrix). Default off so
-  // existing locked baselines are unaffected.
+  // Vision-aided ambiguity resolution research switch:
+  // in the base RtkImuCameraRrrEstimator this tries a current-epoch local joint
+  // covariance over ambiguities + pose/speed-and-bias and falls back to the
+  // GNSS-only shadow covariance on rank failure. The separate
+  // RtkImuCameraRrrVaEstimator overrides this path. Both are opt-in research
+  // paths, not locked-baseline semantics; see research/VISION_AIDED_AR.md.
   bool use_vision_aided_ambiguity_resolution = false;
+
+  // Exact joint-graph AR covariance for RtkImuCameraRrrVaEstimator. When true,
+  // VA requests covariance only for the current ambiguity blocks from the real
+  // Ceres problem. Ceres then marginalizes every other active graph variable
+  // (poses, speed/bias, landmarks, extrinsics, clocks/frequencies, marginalization
+  // priors) consistently through the full problem Jacobian. This is the statistically
+  // clean path, but it is much slower than the bounded local-information experiments.
+  bool ar_use_exact_joint_covariance = true;
+
+  // Vision-ablation control (research/vision-aided-ambiguity-resolution): only used by
+  // the RtkImuCameraRrrVaEstimator. When true, the camera-keyframe (cPose) chain is
+  // still added to the local cross-information, but its reprojection residuals are
+  // withheld -- so the camera pose is present but carries no visual constraint. This
+  // isolates whether the va estimator's accuracy gain comes from genuine visual
+  // information (gain disappears when reprojection is withheld) or merely from adding
+  // more marginalized blocks (gain persists). Diagnostic only; default off.
+  bool ablate_reprojection_in_ar = false;
+
+  // Legacy vision-aided AR covariance mix. Diagnostic only: Cov = gamma * local +
+  // (1 - gamma) * shadow. This is not statistically consistent and is retained only
+  // for ablation/reproducibility of failed experiments.
+  double vision_ar_covariance_mix = 0.5;
+
+  // Legacy experimental delta-information fusion:
+  //     I_final = I_shadow + (A_with_reprojection - A_without_reprojection)
+  // where A_* is the marginal ambiguity information from local matrices with/without
+  // reprojection residuals. This avoids reusing the same GNSS residual in the explicit
+  // shadow term, but it is still an approximation: unrequested neighboring states and
+  // landmarks are conditioned at their current values rather than marginalized. Repeated
+  // UrbanNav Deep runs show this can increase fixed-rate while degrading horizontal
+  // accuracy. It is kept only for ablation when ar_use_exact_joint_covariance=false.
+  bool ar_use_delta_information = true;
+
+  // Fast exact-in-window marginal ambiguity covariance for RtkImuCameraRrrVaEstimator.
+  // Computes the SAME quantity as ar_use_exact_joint_covariance -- Q_aa = [H_active^-1]_aa,
+  // the marginal covariance of the current ambiguity blocks after marginalizing (not
+  // conditioning) every other active state including the marginalization prior -- but by
+  // exploiting the factor-graph sparsity (block-eliminate landmarks, then dense-eliminate
+  // the remaining nuisance states) instead of ceres::Covariance's whole-problem QR/SVD.
+  // Cost is bounded by the sliding window, not the trajectory length, so the statistically
+  // consistent covariance becomes usable at every AR epoch in real time. Returns false
+  // (caller falls back to the plain shadow covariance) when the reduced ambiguity
+  // information is not positive-definite -- never fabricating confidence. Precedence in
+  // the VA estimator: fast (this) -> exact (ceres) -> delta/mix. See
+  // research/VISION_AIDED_AR.md. Default on: this is the intended VA path.
+  bool ar_use_fast_marginal_covariance = true;
 };
 
 // Estimator
@@ -121,7 +165,11 @@ protected:
   // speed-and-bias state. Returns false (leaving `covariance` untouched) if either
   // the shadow covariance or the fused information matrix is unusable, so the
   // caller can fall back to the plain shadow covariance.
-  bool estimateVisionAidedAmbiguityCovariance(
+  // Virtual so the RtkImuCameraRrrVaEstimator subclass (research/vision-aided-
+  // ambiguity-resolution) can extend the local cross-information parameter set to
+  // include the current camera keyframe (cPose), routing genuine visual information
+  // into the ambiguity covariance rather than only the IMU/pose chain.
+  virtual bool estimateVisionAidedAmbiguityCovariance(
     const State& state, Eigen::MatrixXd& covariance);
 
   // Get latest state

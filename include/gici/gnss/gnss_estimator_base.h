@@ -55,6 +55,29 @@ struct GnssEstimatorBaseOptions {
 
   // Minimum number of continuous large amount rejection to be considered as divergence
   size_t diverge_min_num_continuous_reject = 10;
+
+  // Whether integer-fix constraints (kAmbiguityError) are folded into the
+  // marginalization prior when their ambiguity states slide out of the window
+  // (upstream behavior, default). If false, they are erased at marginalization
+  // instead: fixes stay fully hard inside the live window but expire with it, so
+  // the everlasting prior carries only measurement information, never AR
+  // decisions (research/PREREG_SOFT_FIX.md, "revocable fixes").
+  bool margin_ambiguity_fix_constraints = true;
+
+  // Bounded-influence GNSS float estimation (research/PREREG_ROBUST_FLOAT.md):
+  // replace the upstream unbounded-influence HuberLoss(1.0) on pseudorange/
+  // phaserange/doppler residuals with a redescending Tukey biweight at the
+  // literature-standard 95%-efficiency scale c = 4.685 (sigma-normalized
+  // residuals; not fitted to any dataset). Default false = upstream
+  // byte-identical.
+  bool use_bounded_influence_gnss_loss = false;
+
+  // Soft bounded-influence variant (PREREG_ROBUST_FLOAT.md addendum): Cauchy at
+  // its own 95%-efficiency constant c = 2.3849. Unlike Tukey it never zeroes a
+  // residual (weight 1/(1+(r/c)^2) > 0 everywhere), so it keeps a basin of
+  // attraction and cannot starve the float of all GNSS. Takes precedence over
+  // use_bounded_influence_gnss_loss when set. Default false.
+  bool use_cauchy_gnss_loss = false;
 };
 
 // Estimator
@@ -101,10 +124,19 @@ public:
   // Check if we have velocity estimate
   inline bool hasVelocityEstimate() { return has_velocity_estimate_; }
 
-protected: 
+protected:
+  // Loss function for raw GNSS measurement residuals: upstream HuberLoss(1.0)
+  // unless bounded-influence mode is enabled (Tukey c = 4.685; see
+  // GnssEstimatorBaseOptions::use_bounded_influence_gnss_loss).
+  ceres::LossFunction* gnssLossFunction();
+
+  // Mechanism-check logging for bounded-influence mode: counts sigma-normalized
+  // GNSS residuals of the given state beyond c/2 (downweighted) and c (zeroed).
+  void logBoundedInfluenceStats(const State& state);
+
   // Add GNSS position block to graph
   BackendId addGnssPositionParameterBlock(
-    const int32_t id, 
+    const int32_t id,
     const Eigen::Vector3d& prior);
 
   // Add GNSS velocity block to graph
@@ -688,6 +720,10 @@ protected:
 protected:
   // Options
   GnssEstimatorBaseOptions gnss_base_options_;
+
+  // Bounded-influence (Tukey) loss for raw GNSS residuals; lazily created by
+  // gnssLossFunction() when use_bounded_influence_gnss_loss is set.
+  std::shared_ptr<ceres::LossFunction> bounded_influence_loss_;
 
   // Measurements
   std::deque<GnssMeasurement> gnss_measurements_;

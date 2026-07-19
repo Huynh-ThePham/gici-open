@@ -192,18 +192,38 @@ AmbiguityResolution::Result AmbiguityResolution::solvePpp(
 
   // Apply in graph and check residual
   double range_cost_before = computeRangeCost(epoch_id);
+  // Opt-in joint post-fix validation (research/vision-aided-ambiguity-resolution):
+  // capture the vision+IMU cost before the constrained re-solve. Same zero-threshold
+  // must-not-increase rule as the upstream range-cost check below -- a subtly-wrong
+  // integer that still matches GNSS ranges bends the trajectory against vision/IMU
+  // and is rejected here.
+  double joint_cost_before = 0.0;
+  if (options_.use_joint_cost_validation) {
+    joint_cost_before = computeJointNonGnssCost();
+  }
   graph_->options.max_num_iterations = 1;
   graph_->options.logging_type = ceres::LoggingType::SILENT;
   graph_->options.minimizer_progress_to_stdout = false;
   graph_->solve();
   double range_cost = computeRangeCost(epoch_id);
   if (range_cost > range_cost_before) {
-    LOG(INFO) << "Invalid ambiguity resolution: Total cost increases from " 
-      << std::scientific << std::setprecision(3) 
+    LOG(INFO) << "Invalid ambiguity resolution: Total cost increases from "
+      << std::scientific << std::setprecision(3)
       << range_cost_before << " to " << range_cost << ".";
     setGraphParameters(full_parameters_store_);
     eraseAmbiguityResidualBlocks(curAmbLanePairs());
     return Result::NoFix;
+  }
+  if (options_.use_joint_cost_validation) {
+    const double joint_cost = computeJointNonGnssCost();
+    if (joint_cost > joint_cost_before) {
+      LOG(INFO) << "Invalid ambiguity resolution: Joint vision/IMU cost increases from "
+        << std::scientific << std::setprecision(3)
+        << joint_cost_before << " to " << joint_cost << ".";
+      setGraphParameters(full_parameters_store_);
+      eraseAmbiguityResidualBlocks(curAmbLanePairs());
+      return Result::NoFix;
+    }
   }
 
   // Check status
@@ -567,16 +587,34 @@ int AmbiguityResolution::solveLanes(
   }
   Eigen::VectorXd active_float_ambiguities = float_ambiguities;
   Eigen::MatrixXd active_float_covariance = float_covariance;
+  // Bootstrapping success rate of the exact accepted subset -- consumed by the
+  // decision-confidence constraint weight (research/PREREG_SOFT_WEIGHT.md).
+  double accepted_success_rate = -1.0;
   // solve by LAMBDA
   if (!use_rounding) {
-    // Try full AR and then partial AR, until it successed or active number 
+    // Try full AR and then partial AR, until it successed or active number
     // of ambiguities reaches the minimum number of fixation judgement.
     double ratio = 0.0;
     while (num_active >= min_num_fixation) {
       if (!(skip_full && num_active == float_ambiguities.size())) {
+        // Opt-in integer-bootstrapping success-rate gate (research/vision-aided-
+        // ambiguity-resolution): only attempt a subset whose theoretical success rate
+        // meets the declared failure-rate budget; otherwise shrink, same as the
+        // existing per-ambiguity std gate below.
+        double subset_success_rate = -1.0;
+        if (options_.min_bootstrap_success_rate > 0.0 ||
+            options_.use_success_rate_fix_information) {
+          subset_success_rate = bootstrapSuccessRate(active_float_covariance);
+        }
+        const bool ps_ok = options_.min_bootstrap_success_rate <= 0.0 ||
+          subset_success_rate >= options_.min_bootstrap_success_rate;
+        if (ps_ok)
         if (sqrt(active_float_covariance(num_active - 1, num_active - 1)) < 0.25)
-        if (solveAmbiguityLambda(active_float_ambiguities, 
-            active_float_covariance, options_.ratio, fixed_ambiguities, ratio)) break;
+        if (solveAmbiguityLambda(active_float_ambiguities,
+            active_float_covariance, options_.ratio, fixed_ambiguities, ratio)) {
+          accepted_success_rate = subset_success_rate;
+          break;
+        }
       }
       // reduce subsets
       --num_active;
@@ -596,6 +634,12 @@ int AmbiguityResolution::solveLanes(
       fixed_ambiguities.conservativeResize(num_active + 1);
       fixed_ambiguities(num_active) = integer;
       num_active++;
+    }
+    if (options_.use_success_rate_fix_information && num_active > 0) {
+      // Documented approximation (PREREG_SOFT_WEIGHT.md): the LD-decorrelated P_s
+      // upper-bounds plain rounding success; used as the uniform decision model.
+      accepted_success_rate = bootstrapSuccessRate(
+        float_covariance.topLeftCorner(num_active, num_active));
     }
   }
 
@@ -662,7 +706,19 @@ int AmbiguityResolution::solveLanes(
   }
 
   // Add to graph
-  const double information = 1.0e6; 
+  // Upstream: hard constraint (std 0.001 cycles). Opt-in decision-confidence weight
+  // (research/PREREG_SOFT_WEIGHT.md): Gaussian moment match of the integer decision
+  // mixture -- correct w.p. P_s (upstream baseline variance 1e-6 cycle^2), wrong
+  // w.p. 1-P_s (~1 cycle^2). No free parameters.
+  double information = 1.0e6;
+  if (options_.use_success_rate_fix_information) {
+    const double ps = accepted_success_rate < 0.0 ? 0.0 :
+      (accepted_success_rate > 1.0 ? 1.0 : accepted_success_rate);
+    const double variance = (1.0 - ps) * 1.0 + ps * 1.0e-6;
+    information = 1.0 / variance;
+    LOG(INFO) << "[softw] n=" << num_active << " Ps=" << std::setprecision(6) << ps
+      << " std_cycles=" << sqrt(variance);
+  }
   for (int i = 0; i < num_active; i++) {
     auto& lane_pair = lane_pairs[i];
     std::vector<double> coefficients;
@@ -862,26 +918,120 @@ void AmbiguityResolution::setGraphParameters(std::vector<Parameter>& parameters)
 // Compute pseudorange and phasernage total cost in current epoch
 double AmbiguityResolution::computeRangeCost(const BackendId& epoch_id)
 {
-  Graph::ResidualBlockCollection residual_blocks = 
+  Graph::ResidualBlockCollection residual_blocks =
     graph_->residuals(epoch_id.asInteger());
   double total_cost_square = 0.0;
   std::vector<double> residuals;
   for (size_t i = 0; i < residual_blocks.size(); i++) {
     auto& residual_block = residual_blocks[i];
     ErrorType type = residual_block.error_interface_ptr->typeInfo();
-    if (!(type == ErrorType::kPseudorangeError || 
-          type == ErrorType::kPseudorangeErrorSD || 
+    if (!(type == ErrorType::kPseudorangeError ||
+          type == ErrorType::kPseudorangeErrorSD ||
           type == ErrorType::kPseudorangeErrorDD ||
-          type == ErrorType::kPhaserangeError || 
-          type == ErrorType::kPhaserangeErrorSD || 
+          type == ErrorType::kPhaserangeError ||
+          type == ErrorType::kPhaserangeErrorSD ||
           type == ErrorType::kPhaserangeErrorDD)) continue;
     double residual[1];
-    graph_->problem()->EvaluateResidualBlock(residual_block.residual_block_id, 
+    graph_->problem()->EvaluateResidualBlock(residual_block.residual_block_id,
       false, nullptr, residual, nullptr);
     residuals.push_back(*residual);
     total_cost_square += square(*residual);
   }
   return sqrt(total_cost_square);
+}
+
+// research/vision-aided-ambiguity-resolution: robustified total cost of the joint
+// vision+IMU residuals over the whole active graph. Excludes all GNSS types and the
+// ambiguity-fixation constraints by construction (only reprojection and IMU
+// preintegration are summed). Uses the same loss the optimizer minimizes, so "cost
+// increases" means the fix genuinely strains the visual/inertial information.
+double AmbiguityResolution::computeJointNonGnssCost()
+{
+  const Graph::ResidualBlockCollection residual_blocks = graph_->residuals();
+  double total_cost = 0.0;
+  for (const auto& residual_block : residual_blocks) {
+    const ErrorType type = residual_block.error_interface_ptr->typeInfo();
+    if (!(type == ErrorType::kReprojectionError || type == ErrorType::kIMUError)) {
+      continue;
+    }
+    double cost = 0.0;
+    graph_->problem()->EvaluateResidualBlock(residual_block.residual_block_id,
+      true, &cost, nullptr, nullptr);
+    total_cost += cost;
+  }
+  return total_cost;
+}
+
+// research/vision-aided-ambiguity-resolution: integer-bootstrapping success rate
+//   P_s = prod_i ( 2*Phi(1/(2*sigma_i)) - 1 )
+// on the LAMBDA-decorrelated conditional standard deviations sigma_i = sqrt(D_i) of the
+// float-ambiguity covariance (Teunissen 1998; P_s is invariant-optimal after
+// decorrelation). LD factorization and reduction are faithful ports of the vendored
+// RTKLIB lambda.c (third_party/rtklib/src/lambda.c: LD/gauss/perm/reduction), operating
+// column-major on n x n buffers exactly as the original.
+double AmbiguityResolution::bootstrapSuccessRate(const Eigen::MatrixXd& covariance)
+{
+  const int n = static_cast<int>(covariance.rows());
+  if (n <= 0 || covariance.cols() != n) return 0.0;
+
+  // LD factorization: Q = L' * diag(D) * L (RTKLIB convention, unit-lower L).
+  std::vector<double> A(covariance.data(), covariance.data() + n * n);
+  std::vector<double> L(n * n, 0.0), D(n, 0.0), Z(n * n, 0.0);
+  for (int i = 0; i < n; i++) Z[i + i * n] = 1.0;
+  for (int i = n - 1; i >= 0; i--) {
+    if ((D[i] = A[i + i * n]) <= 0.0) return 0.0;  // not PD -> no valid success rate
+    const double a = std::sqrt(D[i]);
+    for (int j = 0; j <= i; j++) L[i + j * n] = A[i + j * n] / a;
+    for (int j = 0; j <= i - 1; j++)
+      for (int k = 0; k <= j; k++) A[j + k * n] -= L[i + k * n] * L[i + j * n];
+    for (int j = 0; j <= i; j++) L[i + j * n] /= L[i + i * n];
+  }
+
+  // Reduction (integer Gauss transformations + permutations), RTKLIB lambda.c.
+  auto gauss_tr = [&](int i, int j) {
+    const int mu = static_cast<int>(std::floor(L[i + j * n] + 0.5));
+    if (mu != 0) {
+      for (int k = i; k < n; k++) L[k + n * j] -= static_cast<double>(mu) * L[k + i * n];
+      for (int k = 0; k < n; k++) Z[k + n * j] -= static_cast<double>(mu) * Z[k + i * n];
+    }
+  };
+  auto perm_tr = [&](int j, double del) {
+    const double eta = D[j] / del;
+    const double lam = D[j + 1] * L[j + 1 + j * n] / del;
+    D[j] = eta * D[j + 1];
+    D[j + 1] = del;
+    for (int k = 0; k <= j - 1; k++) {
+      const double a0 = L[j + k * n], a1 = L[j + 1 + k * n];
+      L[j + k * n] = -L[j + 1 + j * n] * a0 + a1;
+      L[j + 1 + k * n] = eta * a0 + lam * a1;
+    }
+    L[j + 1 + j * n] = lam;
+    for (int k = j + 2; k < n; k++) std::swap(L[k + j * n], L[k + (j + 1) * n]);
+    for (int k = 0; k < n; k++) std::swap(Z[k + j * n], Z[k + (j + 1) * n]);
+  };
+  {
+    int j = n - 2, k = n - 2;
+    while (j >= 0) {
+      if (j <= k) for (int i = j + 1; i < n; i++) gauss_tr(i, j);
+      const double del = D[j] + L[j + 1 + j * n] * L[j + 1 + j * n] * D[j + 1];
+      if (del + 1E-6 < D[j + 1]) {  // compared considering numerical error
+        perm_tr(j, del);
+        k = j;
+        j = n - 2;
+      }
+      else j--;
+    }
+  }
+
+  // P_s over the decorrelated conditional variances.
+  double p_success = 1.0;
+  for (int i = 0; i < n; i++) {
+    if (!(D[i] > 0.0)) return 0.0;
+    const double x = 1.0 / (2.0 * std::sqrt(D[i]));
+    const double phi = 0.5 * std::erfc(-x / std::sqrt(2.0));
+    p_success *= (2.0 * phi - 1.0);
+  }
+  return p_success;
 }
 
 }

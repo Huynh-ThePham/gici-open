@@ -96,7 +96,8 @@ private:
               estimator_type == EstimatorType::GnssImuCameraSrr || 
               estimator_type == EstimatorType::SppImuCameraRrr ||
               estimator_type == EstimatorType::DgnssImuCameraRrr ||
-              estimator_type == EstimatorType::RtkImuCameraRrr || 
+              estimator_type == EstimatorType::RtkImuCameraRrr ||
+              estimator_type == EstimatorType::RtkImuCameraRrrVa ||
               estimator_type == EstimatorType::PppImuCameraRrr);
     }
     else if (sensor_type == SensorType::IMU) {
@@ -108,14 +109,16 @@ private:
               estimator_type == EstimatorType::GnssImuCameraSrr || 
               estimator_type == EstimatorType::SppImuCameraRrr ||
               estimator_type == EstimatorType::DgnssImuCameraRrr ||
-              estimator_type == EstimatorType::RtkImuCameraRrr || 
+              estimator_type == EstimatorType::RtkImuCameraRrr ||
+              estimator_type == EstimatorType::RtkImuCameraRrrVa ||
               estimator_type == EstimatorType::PppImuCameraRrr);
     }
     else if (sensor_type == SensorType::Camera) {
       return (estimator_type == EstimatorType::GnssImuCameraSrr || 
               estimator_type == EstimatorType::SppImuCameraRrr ||
               estimator_type == EstimatorType::DgnssImuCameraRrr ||
-              estimator_type == EstimatorType::RtkImuCameraRrr || 
+              estimator_type == EstimatorType::RtkImuCameraRrr ||
+              estimator_type == EstimatorType::RtkImuCameraRrrVa ||
               estimator_type == EstimatorType::PppImuCameraRrr);
     }
     else return false;
@@ -126,7 +129,8 @@ private:
     return (estimator_type == EstimatorType::GnssImuCameraSrr || 
             estimator_type == EstimatorType::SppImuCameraRrr ||
             estimator_type == EstimatorType::DgnssImuCameraRrr ||
-            estimator_type == EstimatorType::RtkImuCameraRrr || 
+            estimator_type == EstimatorType::RtkImuCameraRrr ||
+            estimator_type == EstimatorType::RtkImuCameraRrrVa ||
             estimator_type == EstimatorType::PppImuCameraRrr);
   }
 

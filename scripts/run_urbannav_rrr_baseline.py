@@ -35,10 +35,28 @@ GICI_MAIN = Path(
         str(REPO / "build" / "gici_main"),
     )
 )
-TEMPLATE = REPO / "research" / "config" / "rtk_imu_camera_rrr_urbannav.yaml"
+BASELINE_TEMPLATE = REPO / "research" / "config" / "rtk_imu_camera_rrr_urbannav.yaml"
+RESEARCH_VA_TEMPLATE = REPO / "research" / "config" / "rtk_imu_camera_rrr_va_urbannav.yaml"
 
-_DEFAULT_DATA_ROOT = Path("/media/theph/Data1/Research/dataset/UrbanNavDataset")
-DATA_ROOT = Path(os.environ.get("URBANNAV_DATA_ROOT", str(_DEFAULT_DATA_ROOT)))
+
+def _default_data_root() -> Path:
+    env_root = os.environ.get("URBANNAV_DATA_ROOT")
+    if env_root:
+        return Path(env_root)
+    candidates = [
+        Path("/media/theph/Data1/Research/dataset/UrbanNavDataset"),
+        Path("/media/theph/Data1/Research/dataset"),
+    ]
+    for candidate in candidates:
+        if any((candidate / name).is_dir() for name in (
+            "UrbanNav-HK-Medium-Urban-1",
+            "UrbanNav-HK-Deep-Urban-1",
+        )):
+            return candidate
+    return candidates[0]
+
+
+DATA_ROOT = _default_data_root()
 GPS_UTC_LEAP_SECONDS = 18.0
 WGS84_A = 6378137.0
 WGS84_F = 1.0 / 298.257223563
@@ -91,7 +109,7 @@ DATASETS: dict[str, Dataset] = {
         eph="gnss/base/_deprecated/brdc_mn.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211410000_01D_01D_DCB.BSX",
         timeout_s=10800,
-        min_gpgga_epochs=1400,
+        min_gpgga_epochs=14000,
     ),
 }
 
@@ -311,7 +329,7 @@ def evaluate_solution(solution: Path, gt: dict[str, list[Any]], gps_week_day_off
     }
 
 
-def validate_dataset(ds: Dataset) -> dict[str, Any]:
+def validate_dataset(ds: Dataset, template_path: Path, config_source: str) -> dict[str, Any]:
     paths = {
         "gt": ds.root / ds.gt_file,
         "rover": ds.root / ds.rover,
@@ -320,12 +338,20 @@ def validate_dataset(ds: Dataset) -> dict[str, Any]:
         "dcb": REPO / ds.dcb,
         "imu": ds.root / "gici_rrr/imu.bin.txt",
         "camera": ds.root / "gici_rrr/camera.bin",
-        "dataset_config": ds.root / "gici_rrr/config.yaml",
         "gici_main": GICI_MAIN,
-        "template": TEMPLATE,
+        "template": template_path,
     }
+    if config_source == "dataset":
+        paths["dataset_config"] = ds.root / "gici_rrr/config.yaml"
     checks = {k: {"path": str(v), "ok": v.is_file()} for k, v in paths.items()}
-    return {"dataset": ds.key, "title": ds.title, "checks": checks, "ok": all(c["ok"] for c in checks.values())}
+    return {
+        "dataset": ds.key,
+        "title": ds.title,
+        "data_root": str(DATA_ROOT),
+        "config_source": config_source,
+        "checks": checks,
+        "ok": all(c["ok"] for c in checks.values()),
+    }
 
 
 def _streamer_by_tag(config: dict[str, Any], tag: str) -> dict[str, Any]:
@@ -357,12 +383,43 @@ def _render_dataset_config(ds: Dataset, out_dir: Path) -> str:
     return yaml.safe_dump(cfg, sort_keys=False)
 
 
-def render_config(ds: Dataset, out_dir: Path, config_source: str) -> Path:
+def _assert_estimator_config(text: str, expected_estimator: str, context: str) -> None:
+    cfg = yaml.safe_load(text)
+    try:
+        estimator = cfg["estimate"][0]["estimator"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"{context}: invalid estimator config structure") from exc
+
+    actual = estimator.get("type")
+    if actual != expected_estimator:
+        raise RuntimeError(
+            f"{context}: expected estimator type {expected_estimator!r}, got {actual!r}"
+        )
+
+    rrr_options = estimator.get("rtk_imu_camera_rrr_options", {})
+    uses_va = bool(rrr_options.get("use_vision_aided_ambiguity_resolution", False))
+    if expected_estimator == "rtk_imu_camera_rrr" and uses_va:
+        raise RuntimeError(
+            f"{context}: baseline config must not enable vision-aided ambiguity resolution"
+        )
+    if expected_estimator == "rtk_imu_camera_rrr_va" and not uses_va:
+        raise RuntimeError(
+            f"{context}: VA config must explicitly enable vision-aided ambiguity resolution"
+        )
+
+
+def render_config(
+    ds: Dataset,
+    out_dir: Path,
+    config_source: str,
+    template_path: Path,
+    expected_estimator: str,
+) -> Path:
     (out_dir / "output").mkdir(parents=True, exist_ok=True)
     if config_source == "dataset":
         text = _render_dataset_config(ds, out_dir)
     else:
-        text = TEMPLATE.read_text()
+        text = template_path.read_text()
         cam_buffer = 672 * 376 + 512
         repl = {
             "<ROVER_OBS>": str(ds.root / ds.rover),
@@ -376,6 +433,7 @@ def render_config(ds: Dataset, out_dir: Path, config_source: str) -> Path:
         }
         for k, v in repl.items():
             text = text.replace(k, v)
+    _assert_estimator_config(text, expected_estimator, str(template_path))
     cfg_path = out_dir / "config.yaml"
     cfg_path.write_text(text)
     return cfg_path
@@ -433,12 +491,18 @@ def run_gici(
 ) -> dict[str, Any]:
     sol = out_dir / "output" / "solution.txt"
     log_path = out_dir / "run.log"
+    wd = _watchdog_settings(ds, use_watchdog)
     if skip_run and sol.is_file() and sol.stat().st_size > 0:
-        return {"skipped_run": True}
+        gpgga = count_gpgga(sol)
+        if gpgga < int(wd["min_gpgga"]):
+            raise RuntimeError(
+                f"--skip-run solution has only {gpgga} GPGGA epochs; "
+                f"expected at least {wd['min_gpgga']}: {sol}"
+            )
+        return {"skipped_run": True, "final_gpgga": gpgga, "watchdog": wd}
     if sol.exists():
         sol.unlink()
 
-    wd = _watchdog_settings(ds, use_watchdog)
     t0 = time.time()
     cmd = [str(GICI_MAIN), str(cfg_path)]
     meta: dict[str, Any] = {"skipped_run": False, "watchdog": wd}
@@ -465,6 +529,7 @@ def run_gici(
                         f"  [watchdog] max timeout {timeout_s}s reached; sending SIGINT",
                         flush=True,
                     )
+                    meta["timeout_reached"] = True
                     os.killpg(proc.pid, signal.SIGINT)
                     break
 
@@ -518,11 +583,20 @@ def run_gici(
 
     meta["exit_code"] = proc.returncode if proc.returncode is not None else -1
     meta["wall_s"] = time.time() - t0
-    ok_exits = {0, 124, 130, -2, -6, 134, -15}
-    if meta["exit_code"] not in ok_exits and (not sol.is_file() or sol.stat().st_size == 0):
+    if meta.get("timeout_reached"):
+        raise RuntimeError(f"gici_main timed out after {timeout_s}s; see {log_path}")
+    ok_exits = {0, 130, -signal.SIGINT}
+    if meta["exit_code"] not in ok_exits:
         raise RuntimeError(f"gici_main failed exit={meta['exit_code']}; see {log_path}")
     if not sol.is_file() or sol.stat().st_size == 0:
         raise RuntimeError(f"no solution.txt; see {log_path}")
+    final_gpgga = count_gpgga(sol)
+    meta["final_gpgga"] = final_gpgga
+    if final_gpgga < int(wd["min_gpgga"]):
+        raise RuntimeError(
+            f"solution has only {final_gpgga} GPGGA epochs; "
+            f"expected at least {wd['min_gpgga']}: {sol}"
+        )
     return meta
 
 
@@ -531,16 +605,19 @@ def run_dataset(
     out_root: Path,
     skip_run: bool,
     config_source: str,
+    template_path: Path,
+    expected_estimator: str,
+    result_algorithm: str,
     use_watchdog: bool = True,
 ) -> dict[str, Any]:
     out_dir = out_root / ds.key
     out_dir.mkdir(parents=True, exist_ok=True)
-    validation = validate_dataset(ds)
+    validation = validate_dataset(ds, template_path, config_source)
     (out_dir / "dataset_validation.json").write_text(json.dumps(validation, indent=2))
     if not validation["ok"]:
         raise RuntimeError(f"dataset validation failed for {ds.key}")
 
-    cfg_path = render_config(ds, out_dir, config_source)
+    cfg_path = render_config(ds, out_dir, config_source, template_path, expected_estimator)
     meta = run_gici(cfg_path, out_dir, ds.timeout_s, skip_run=skip_run, ds=ds, use_watchdog=use_watchdog)
     gt = load_ground_truth(ds.root / ds.gt_file)
     metrics = evaluate_solution(out_dir / "output" / "solution.txt", gt, ds.gps_week_day_offset)
@@ -548,9 +625,11 @@ def run_dataset(
     result = {
         "dataset": ds.key,
         "title": ds.title,
+        "algorithm": result_algorithm,
         "paper_ape_pos_m": paper["pos_m"],
         "paper_ape_rot_deg": paper["rot_deg"],
         "config_source": config_source,
+        "config_template": str(template_path),
         "metrics": metrics,
         "meta": meta,
         "solution_lines": sum(1 for _ in (out_dir / "output" / "solution.txt").open()),
@@ -559,8 +638,16 @@ def run_dataset(
     return result
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="UrbanNav upstream RRR baseline")
+def main(
+    argv: list[str] | None = None,
+    *,
+    description: str = "UrbanNav upstream RRR baseline",
+    template_path: Path = BASELINE_TEMPLATE,
+    expected_estimator: str = "rtk_imu_camera_rrr",
+    result_algorithm: str = "rtk_imu_camera_rrr",
+    default_out_root: Path | None = None,
+) -> int:
+    ap = argparse.ArgumentParser(description=description)
     ap.add_argument("datasets", nargs="*", choices=["medium", "deep"], default=["medium", "deep"])
     ap.add_argument("--skip-run", action="store_true")
     ap.add_argument(
@@ -576,8 +663,19 @@ def main() -> int:
         help="wrapper = research/config/rtk_imu_camera_rrr_urbannav.yaml (canonical); "
         "dataset = UrbanNav gici_rrr/config.yaml (deprecated, do not use for new work)",
     )
-    ap.add_argument("--out-root", type=Path, default=REPO / "results" / "baseline" / "urbannav")
-    args = ap.parse_args()
+    ap.add_argument(
+        "--allow-dataset-config",
+        action="store_true",
+        help="Explicitly allow the deprecated UrbanNav dataset config source.",
+    )
+    ap.add_argument(
+        "--out-root",
+        type=Path,
+        default=default_out_root or REPO / "results" / "baseline" / "urbannav",
+    )
+    args = ap.parse_args(argv)
+    if args.config_source == "dataset" and not args.allow_dataset_config:
+        ap.error("--config-source dataset is deprecated; pass --allow-dataset-config explicitly")
     if args.datasets == ["medium", "deep"] and len(sys.argv) == 1:
         pass
 
@@ -590,7 +688,7 @@ def main() -> int:
         print(f"\n=== {ds.title} ===", flush=True)
         try:
             if args.validate_only:
-                v = validate_dataset(ds)
+                v = validate_dataset(ds, template_path, args.config_source)
                 print(json.dumps(v, indent=2))
                 if not v["ok"]:
                     failures.append(key)
@@ -600,6 +698,9 @@ def main() -> int:
                 args.out_root,
                 skip_run=args.skip_run,
                 config_source=args.config_source,
+                template_path=template_path,
+                expected_estimator=expected_estimator,
+                result_algorithm=result_algorithm,
                 use_watchdog=not args.no_watchdog,
             )
             results[key] = row

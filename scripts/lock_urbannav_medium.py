@@ -53,7 +53,7 @@ TPL_RRR = REPO / "research/config/rtk_imu_camera_rrr_urbannav.yaml"
 DCB = REPO / "research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX"
 EXPECTED = REPO / "research/baseline/expected_urbannav_medium.json"
 
-WHITELIST_EXIT = {0, -2, -6, 130, 134, 124}
+ACCEPTED_EXIT = {0, -signal.SIGINT, 130}
 
 
 def md5(path: Path) -> str:
@@ -215,7 +215,7 @@ def run_gici(
     gpgga = count_gpgga(sol)
     return {
         "exit_code": exit_code,
-        "exit_ok": exit_code in WHITELIST_EXIT if exit_code is not None else False,
+        "exit_ok": exit_code in ACCEPTED_EXIT if exit_code is not None else False,
         "elapsed_s": round(elapsed, 1),
         "solution": str(sol),
         "gpgga_epochs": gpgga,
@@ -393,7 +393,7 @@ def run_p9_baseline_wrapper(data_root: Path, run_out: Path) -> dict[str, Any]:
         "config": str(medium_dir / "config.yaml"),
         "wrapper_exit": proc.returncode,
         "exit_code": exit_code,
-        "exit_ok": exit_code in WHITELIST_EXIT if exit_code is not None else False,
+        "exit_ok": exit_code in ACCEPTED_EXIT if exit_code is not None else False,
         "elapsed_s": round(elapsed, 1) if elapsed is not None else None,
         "solution": str(sol_dst),
         "gpgga_epochs": gpgga,
@@ -406,7 +406,7 @@ def run_p9_baseline_wrapper(data_root: Path, run_out: Path) -> dict[str, Any]:
     p9["ok"] = (
         proc.returncode == 0
         and gpgga >= 6500
-        and exit_code in WHITELIST_EXIT
+        and exit_code in ACCEPTED_EXIT
     )
     if proc.returncode != 0:
         p9["stderr_tail"] = (proc.stderr or "")[-2000:]
@@ -566,10 +566,6 @@ def main() -> int:
             (run_out / "P7_rtk").mkdir(exist_ok=True)
             p7 = run_gici(cfg, run_out / "P7_rtk", "run.log", timeout_s=7200, min_gpgga=400, stable_s=60)
             p7["ok"] = p7["exit_ok"] and p7["gpgga_epochs"] >= 400
-            if not p7["exit_ok"] and p7["gpgga_epochs"] >= 400:
-                p7["exit_ok"] = True
-                p7["ok"] = True
-                p7["note"] = "watchdog SIGINT after stable RTK output (expected)"
             write_phase(lock_dir, "P7_rtk_only", p7)
             summary["phases"]["P7"] = p7["ok"]
 
@@ -587,9 +583,6 @@ def main() -> int:
 
         if "P9" in phases:
             p9 = run_p9_baseline_wrapper(args.root, run_out)
-            if p9["ok"] and not p9["exit_ok"]:
-                p9["exit_ok"] = True
-                p9["note"] = "upstream teardown after full solution (whitelisted)"
             write_phase(lock_dir, "P9_full_rrr", p9)
             summary["phases"]["P9"] = p9["ok"]
 

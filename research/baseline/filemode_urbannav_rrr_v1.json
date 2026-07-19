@@ -14,8 +14,8 @@
   "config": {
     "template": "research/config/rtk_imu_camera_rrr_urbannav.yaml",
     "template_branch": "research/standard-env",
-    "template_sha256": "d8250202c7a878375fd9b33270f1b646fea286905e506f018b86967e9a55d271",
-    "template_sha256_note": "Updated after the RRR estimator tuning commit on research/standard-env (rtk_options/gnss_estimator_base_options reshape, enable_input_align: false). The old e7eb80e61767ee2fc5cfc2eb60ccde35961782aca7d62f7ebd09132d11ebc9d4 hash matched only the retired truncated-run figure below, not any of the current full-trajectory numbers.",
+    "template_sha256": "df1aab2034151e6de862547555e164442e033a8d3d4df7284f9e95735b163643",
+    "template_sha256_note": "Updated after adding an explicit baseline guard (use_vision_aided_ambiguity_resolution: false) and comments separating the locked baseline template from the VA research template. Estimator semantics remain rtk_imu_camera_rrr; no metrics are re-locked by this hash-only hygiene update.",
     "canonical_source": "wrapper",
     "invalid_sources": [
       "UrbanNavDataset/.../gici_rrr/config.yaml"
@@ -37,6 +37,7 @@
       "enable_input_align": false,
       "input_align_latency": 0.2,
       "max_keyframes": 20,
+      "use_vision_aided_ambiguity_resolution": false,
       "use_ambiguity_resolution": true,
       "gnss_extrinsics": [0.0, -0.43, -0.16],
       "body_to_imu_rotation": [0.0, 0.0, 0.0],
@@ -117,7 +118,8 @@
     "eval_medium": "./scripts/run_author_eval_urbannav.sh medium",
     "eval_deep": "./scripts/run_author_eval_urbannav.sh deep"
   },
-  "exit_codes_whitelist": [0, 124, 130, -6, 134],
+  "accepted_exit_codes": [0, 130, -2],
+  "accepted_exit_codes_note": "Crash and timeout exits are failures. -2 is accepted only when produced by the runner's own SIGINT watchdog after the minimum full-trajectory GPGGA count is met.",
   "ros2_mirror": "ros2_wrapper/src/gici_ros2/config/ros_urbannav_rrr_upstream_equivalent.yaml",
   "documentation": "docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md"
 }

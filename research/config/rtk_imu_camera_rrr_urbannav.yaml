@@ -1,4 +1,4 @@
-# Author UrbanNav offline RTK/IMU/Camera RRR
+# Author UrbanNav offline RTK/IMU/Camera RRR — locked baseline only.
 # Stream layout: option/post_estimation_RTK_RRR_rinex_imutext.yaml @ f2b8579
 # Estimator calib: ros_wrapper/src/gici/option/ros_urbannav.yaml (RRR block) @ f2b8579
 # Paths filled by scripts/run_urbannav_rrr_baseline.py
@@ -95,8 +95,9 @@ estimate:
     rtk_imu_camera_rrr_options:
       max_keyframes: 20
       min_yaw_std_init_visual: 0.5
-      # benchmark_joint_ambiguity_covariance: true  # set for cost-measurement runs only
-      # use_vision_aided_ambiguity_resolution: true  # set to enable vision-aided AR
+      # Keep this template algorithm-clean: no research AR covariance path here.
+      # Vision-aided AR experiments use rtk_imu_camera_rrr_va_urbannav.yaml.
+      use_vision_aided_ambiguity_resolution: false
     rtk_options:
       use_ambiguity_resolution: true
       # UrbanNav file-mode: HKKT base epochs are 30 s (default max_age=20 s drops pairs).

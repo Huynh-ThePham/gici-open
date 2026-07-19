@@ -35,6 +35,66 @@ GnssEstimatorBase::GnssEstimatorBase(
 GnssEstimatorBase::~GnssEstimatorBase()
 {}
 
+// Loss function for raw GNSS measurement residuals
+// (research/PREREG_ROBUST_FLOAT.md): upstream HuberLoss(1.0) unless
+// bounded-influence mode selects Tukey biweight at the literature-standard
+// 95%-efficiency scale c = 4.685 on sigma-normalized residuals.
+ceres::LossFunction* GnssEstimatorBase::gnssLossFunction()
+{
+  // Soft variant (Cauchy) takes precedence: never zeroes a residual, so it
+  // retains a basin of attraction (PREREG_ROBUST_FLOAT.md addendum).
+  if (gnss_base_options_.use_cauchy_gnss_loss) {
+    if (!bounded_influence_loss_) {
+      bounded_influence_loss_.reset(new ceres::CauchyLoss(2.3849));
+    }
+    return bounded_influence_loss_.get();
+  }
+  if (!gnss_base_options_.use_bounded_influence_gnss_loss) {
+    return huber_loss_function_ ? huber_loss_function_.get() : nullptr;
+  }
+  if (!bounded_influence_loss_) {
+    bounded_influence_loss_.reset(new ceres::TukeyLoss(4.685));
+  }
+  return bounded_influence_loss_.get();
+}
+
+// Mechanism-check logging for bounded-influence mode: counts sigma-normalized
+// raw GNSS residuals of the state beyond c/2 (materially downweighted) and
+// beyond c (zero influence under Tukey).
+void GnssEstimatorBase::logBoundedInfluenceStats(const State& state)
+{
+  if (!gnss_base_options_.use_bounded_influence_gnss_loss &&
+      !gnss_base_options_.use_cauchy_gnss_loss) return;
+  if (!graph_->parameterBlockExists(state.id_in_graph.asInteger())) return;
+  const double c = gnss_base_options_.use_cauchy_gnss_loss ? 2.3849 : 4.685;
+  size_t num_gnss = 0, num_downweighted = 0, num_zeroed = 0;
+  Graph::ResidualBlockCollection residual_blocks =
+    graph_->residuals(state.id_in_graph.asInteger());
+  for (auto& residual_block : residual_blocks) {
+    ErrorType type = residual_block.error_interface_ptr->typeInfo();
+    if (!(type == ErrorType::kPseudorangeError ||
+          type == ErrorType::kPseudorangeErrorSD ||
+          type == ErrorType::kPseudorangeErrorDD ||
+          type == ErrorType::kPhaserangeError ||
+          type == ErrorType::kPhaserangeErrorSD ||
+          type == ErrorType::kPhaserangeErrorDD ||
+          type == ErrorType::kDopplerError)) continue;
+    double residual[1];
+    if (!graph_->problem()->EvaluateResidualBlock(
+        residual_block.residual_block_id, false, nullptr, residual, nullptr)) {
+      continue;
+    }
+    num_gnss++;
+    const double r = fabs(residual[0]);
+    if (r > c) num_zeroed++;
+    else if (r > 0.5 * c) num_downweighted++;
+  }
+  if (num_gnss > 0) {
+    LOG(INFO) << "[rfloss] n_gnss=" << num_gnss
+      << " down=" << num_downweighted << " zeroed=" << num_zeroed;
+  }
+}
+
 // Add GNSS position block to graph
 BackendId GnssEstimatorBase::addGnssPositionParameterBlock(
   const int32_t id, const Eigen::Vector3d& prior)
@@ -762,7 +822,7 @@ void GnssEstimatorBase::addPseudorangeResidualBlocks(
             GnssMeasurementIndex(satellite.prn, obs.first), 
             gnss_base_options_.error_parameter);
           residual_id = graph_->addResidualBlock(pseudorange_error, 
-            huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+            gnssLossFunction(),
             graph_->parameterBlockPtr(parameter_id.asInteger()),
             graph_->parameterBlockPtr(clock_id.asInteger()));
         }
@@ -776,7 +836,7 @@ void GnssEstimatorBase::addPseudorangeResidualBlocks(
             gnss_base_options_.error_parameter);
           pseudorange_error->setCoordinate(coordinate_);
           residual_id = graph_->addResidualBlock(pseudorange_error, 
-            huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+            gnssLossFunction(),
             graph_->parameterBlockPtr(pose_id.asInteger()), 
             graph_->parameterBlockPtr(gnss_extrinsics_id_.asInteger()),
             graph_->parameterBlockPtr(clock_id.asInteger()));
@@ -827,7 +887,7 @@ void GnssEstimatorBase::addPseudorangeResidualBlocks(
             GnssMeasurementIndex(satellite.prn, obs.first), 
             gnss_base_options_.error_parameter);
           residual_id = graph_->addResidualBlock(pseudorange_error, 
-            huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+            gnssLossFunction(),
             graph_->parameterBlockPtr(parameter_id.asInteger()),
             graph_->parameterBlockPtr(clock_id.asInteger()), 
             graph_->parameterBlockPtr(ifb_id.asInteger()), 
@@ -844,7 +904,7 @@ void GnssEstimatorBase::addPseudorangeResidualBlocks(
             gnss_base_options_.error_parameter);
           pseudorange_error->setCoordinate(coordinate_);
           residual_id = graph_->addResidualBlock(pseudorange_error, 
-            huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+            gnssLossFunction(),
             graph_->parameterBlockPtr(pose_id.asInteger()), 
             graph_->parameterBlockPtr(gnss_extrinsics_id_.asInteger()),
             graph_->parameterBlockPtr(clock_id.asInteger()),
@@ -898,7 +958,7 @@ void GnssEstimatorBase::addPhaserangeResidualBlocks(
           GnssMeasurementIndex(satellite.prn, obs.first), 
           gnss_base_options_.error_parameter);
         residual_id = graph_->addResidualBlock(phaserange_error, 
-          huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+          gnssLossFunction(),
           graph_->parameterBlockPtr(parameter_id.asInteger()),
           graph_->parameterBlockPtr(clock_id.asInteger()), 
           graph_->parameterBlockPtr(ambiguity_id.asInteger()), 
@@ -915,7 +975,7 @@ void GnssEstimatorBase::addPhaserangeResidualBlocks(
           gnss_base_options_.error_parameter);
         phaserange_error->setCoordinate(coordinate_);
         residual_id = graph_->addResidualBlock(phaserange_error, 
-          huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+          gnssLossFunction(),
           graph_->parameterBlockPtr(pose_id.asInteger()), 
           graph_->parameterBlockPtr(gnss_extrinsics_id_.asInteger()),
           graph_->parameterBlockPtr(clock_id.asInteger()),
@@ -976,7 +1036,7 @@ void GnssEstimatorBase::addDopplerResidualBlocks(
           GnssMeasurementIndex(satellite.prn, obs.first), 
           gnss_base_options_.error_parameter);
         graph_->addResidualBlock(doppler_error, 
-          huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+          gnssLossFunction(),
           graph_->parameterBlockPtr(parameter_id.asInteger()),
           graph_->parameterBlockPtr(velocity_id.asInteger()),
           graph_->parameterBlockPtr(freq_id.asInteger()));
@@ -993,7 +1053,7 @@ void GnssEstimatorBase::addDopplerResidualBlocks(
           gnss_base_options_.error_parameter, angular_velocity);
         doppler_error->setCoordinate(coordinate_);
         graph_->addResidualBlock(doppler_error, 
-          huber_loss_function_ ? huber_loss_function_.get() : nullptr,
+          gnssLossFunction(),
           graph_->parameterBlockPtr(pose_id.asInteger()), 
           graph_->parameterBlockPtr(speed_and_bias_id.asInteger()), 
           graph_->parameterBlockPtr(gnss_extrinsics_id_.asInteger()),
@@ -2114,10 +2174,40 @@ void GnssEstimatorBase::addIonosphereMarginBlocksWithResiduals(
 void GnssEstimatorBase::addAmbiguityMarginBlocksWithResiduals(
   const AmbiguityState& state, bool keep)
 {
+  // Revocable fixes (research/PREREG_SOFT_FIX.md): integer-fix constraints encode
+  // AR decisions, not measurements. When enabled, erase them here so they expire
+  // with the window instead of anchoring the everlasting prior.
+  size_t num_fix_constraints_erased = 0;
+  size_t num_empty_blocks_removed = 0;
   for (auto id : state.ids) {
     if (graph_->parameterBlockExists(id.asInteger())) {
-      Graph::ResidualBlockCollection residuals = 
+      if (!gnss_base_options_.margin_ambiguity_fix_constraints) {
+        Graph::ResidualBlockCollection residuals =
+          graph_->residuals(id.asInteger());
+        for (size_t r = 0; r < residuals.size(); ++r) {
+          if (residuals[r].error_interface_ptr->typeInfo() !=
+              ErrorType::kAmbiguityError) continue;
+          graph_->removeResidualBlock(residuals[r].residual_block_id);
+          num_fix_constraints_erased++;
+        }
+      }
+      Graph::ResidualBlockCollection residuals =
         graph_->residuals(id.asInteger());
+      // A block left with no residuals AND unknown to the (persistent)
+      // marginalizer carries no information at all: removing it is exact, while
+      // asking the marginalizer to marginalize a block it never saw violates its
+      // connectivity invariant (fatal CHECK in marginalizeOut). A residual-less
+      // block the marginalizer DOES know still carries prior information and
+      // must be marginalized through it (the prior residual is temporarily
+      // detached from the graph during this pass, so it never shows up in
+      // residuals()).
+      if (residuals.size() == 0) {
+        if (!marginalization_error_->isParameterBlockConnected(id.asInteger())) {
+          graph_->removeParameterBlock(id.asInteger());
+          num_empty_blocks_removed++;
+          continue;
+        }
+      }
       for (size_t r = 0; r < residuals.size(); ++r) {
         marginalization_error_->addResidualBlock(
               residuals[r].residual_block_id);
@@ -2125,6 +2215,11 @@ void GnssEstimatorBase::addAmbiguityMarginBlocksWithResiduals(
       marginalization_parameter_ids_.push_back(id);
       marginalization_keep_parameter_blocks_.push_back(keep);
     }
+  }
+  if (num_fix_constraints_erased > 0 || num_empty_blocks_removed > 0) {
+    LOG(INFO) << "[softfix] erased " << num_fix_constraints_erased
+      << " fix constraints at marginalization, removed "
+      << num_empty_blocks_removed << " empty ambiguity blocks";
   }
 }
 

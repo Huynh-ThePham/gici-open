@@ -45,6 +45,8 @@
 
 #include <ceres/ordered_groups.h>
 #include <unordered_set>
+#include <limits>
+#include <vector>
 
 #include "gici/estimate/homogeneous_point_parameter_block.h"
 #include "gici/estimate/marginalization_error.h"
@@ -172,7 +174,8 @@ void Graph::getLhs(uint64_t parameter_block_id, Eigen::MatrixXd& H)
 // research/vision-aided-ambiguity-resolution: local information matrix (with cross
 // terms) over a small set of parameter blocks -- see graph.h for the full rationale.
 bool Graph::getLocalCrossInformation(
-    const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information)
+    const std::vector<uint64_t>& parameter_block_ids, Eigen::MatrixXd& information,
+    bool exclude_reprojection)
 {
   std::vector<size_t> offsets(parameter_block_ids.size());
   std::vector<size_t> sizes(parameter_block_ids.size());
@@ -190,10 +193,24 @@ bool Graph::getLocalCrossInformation(
 
   // Union of residual blocks touching any requested parameter block, deduplicated
   // (a residual can be reached via more than one of the requested blocks).
+  //
+  // The marginalization prior is deliberately excluded: (1) it summarizes already-
+  // marginalized PAST states, so folding it into a "current-epoch local information"
+  // matrix conflates accumulated history with the current measurement -- not what this
+  // routine is meant to capture; and (2) its Jacobian is dynamically sized and its
+  // EvaluateWithMinimalJacobians writes e0_.rows()-row blocks whose interaction with
+  // this routine's per-residual raw-buffer evaluation is fragile. Skipping it keeps the
+  // local information a clean sum of current-epoch measurement residuals. (Approach-A
+  // callers that request only {ambiguities, current pose, speed-bias} never reach the
+  // prior anyway, since it attaches to the oldest window-boundary states, so this does
+  // not change their results.)
   std::unordered_set<ceres::ResidualBlockId> seen_residuals;
   ResidualBlockCollection touched_residuals;
   for (auto id : parameter_block_ids) {
     for (auto& r : residuals(id)) {
+      const ErrorType type = r.error_interface_ptr->typeInfo();
+      if (type == ErrorType::kMarginalizationError) continue;
+      if (exclude_reprojection && type == ErrorType::kReprojectionError) continue;
       if (seen_residuals.insert(r.residual_block_id).second) {
         touched_residuals.push_back(r);
       }
@@ -262,6 +279,361 @@ bool Graph::getLocalCrossInformation(
     delete[] jacobians_minimal_raw;
   }
 
+  return true;
+}
+
+// research/vision-aided-ambiguity-resolution: exact-in-window marginal ambiguity
+// covariance via structure-exploiting Schur elimination. See graph.h for the contract.
+//
+// We assemble the loss-corrected Gauss-Newton information of the ACTIVE graph in minimal
+// coordinates, partitioned as
+//     H = [ H_aa  H_an   0   ]     a = ambiguities (given order)
+//         [ H_na  H_nn  H_nl ]     n = dense nuisance (poses, speed/bias, clocks, ...)
+//         [  0    H_ln  H_ll ]     l = visual landmarks (H_ll block-diagonal 3x3;
+//                                      H_al = 0 structurally)
+// including the marginalization prior, then Schur-eliminate l block-by-block (rank-
+// truncated per landmark) and n densely, returning Q_aa = S^{-1} with
+//     S = H_aa - H_an (H_nn - H_nl H_ll^+ H_ln)^{-1} H_na.
+// Because Schur complements compose and H_al = 0, this equals [H_active^{-1}]_aa up to
+// the linearization -- the same quantity computeCovariance() (ceres::Covariance) returns
+// -- at a cost bounded by the sliding window, not the trajectory (real-time). The
+// staged elimination also isolates weak-parallax landmarks (rank-truncated locally) so
+// they cannot poison the conditioning of the global elimination, and every path is
+// gated so the routine abstains (returns false) when normal-equations arithmetic cannot
+// numerically resolve the marginal -- it never fabricates confidence.
+bool Graph::getMarginalAmbiguityCovariance(
+    const std::vector<uint64_t>& ambiguity_ids, Eigen::MatrixXd& Q_aa,
+    std::string* fail_reason)
+{
+  auto fail = [&](const char* reason) -> bool {
+    if (fail_reason) *fail_reason = reason;
+    return false;
+  };
+  const int num_amb = static_cast<int>(ambiguity_ids.size());
+  if (num_amb == 0) return fail("no_ambiguities");
+
+  const double eps = std::numeric_limits<double>::epsilon();
+
+  // ---- Pass 0: locate the marginalization prior (if any) and read its information +
+  // connected block ids up front. Blocks referenced by the prior must not be classified
+  // as independently-eliminable landmark blocks below: the prior can couple them to any
+  // other state, which would break the landmark-block independence stage 1 relies on.
+  const ResidualBlockCollection all_residuals = residuals();
+  std::vector<uint64_t> prior_ids;
+  std::vector<size_t> prior_off, prior_dim;
+  Eigen::MatrixXd prior_Lambda;
+  bool have_prior = false;
+  for (const auto& res : all_residuals) {
+    if (res.error_interface_ptr->typeInfo() != ErrorType::kMarginalizationError) continue;
+    if (have_prior) return fail("multiple_priors");
+    auto prior = std::dynamic_pointer_cast<MarginalizationError>(res.error_interface_ptr);
+    if (!prior) return fail("prior_cast");
+    if (!prior->marginalizationInformation(prior_ids, prior_off, prior_dim, prior_Lambda)) {
+      return fail("prior_info_unavailable");
+    }
+    have_prior = true;
+  }
+  std::unordered_set<uint64_t> prior_id_set(prior_ids.begin(), prior_ids.end());
+
+  // ---- Classification. Minimal-coordinate partitions:
+  //   A: the requested ambiguities (scalar), in the caller's order;
+  //   L: visual landmarks (homogeneous points: ambient dim 4, minimal dim 3) NOT touched
+  //      by the prior -- eliminated first, block-by-block, with per-block rank truncation
+  //      (this is what keeps weak-parallax landmarks from poisoning the conditioning of
+  //      the remaining dense elimination);
+  //   N: every other active block (poses, speed/bias, clocks/frequencies, extrinsics, and
+  //      any prior-touched landmark) -- eliminated second, densely.
+  // Fixed/constant blocks are excluded entirely (they contribute no covariance dimension,
+  // matching ceres, which conditions on constant blocks).
+  enum class Part : uint8_t { A, N, L };
+  struct Slot { Part part; int offset; int dim; };  // offset within its own partition
+  std::unordered_map<uint64_t, Slot> slot;
+  slot.reserve(2048);
+  for (int k = 0; k < num_amb; ++k) {
+    const uint64_t id = ambiguity_ids[k];
+    auto it = id_to_parameter_block_map_.find(id);
+    if (it == id_to_parameter_block_map_.end()) return fail("ambiguity_absent");
+    if (it->second->fixed()) return fail("ambiguity_fixed");
+    if (it->second->minimalDimension() != 1) return fail("ambiguity_not_scalar");
+    if (!slot.emplace(id, Slot{Part::A, k, 1}).second) return fail("duplicate_ambiguity");
+  }
+  int n_dim = 0;
+  int num_landmarks = 0;
+  auto slot_of = [&](const std::shared_ptr<ParameterBlock>& pb) -> const Slot* {
+    const uint64_t id = pb->id();
+    auto it = slot.find(id);
+    if (it != slot.end()) return &it->second;
+    if (pb->fixed()) return nullptr;
+    const int md = static_cast<int>(pb->minimalDimension());
+    if (md <= 0) return nullptr;
+    const bool is_landmark = (pb->dimension() == 4 && md == 3 &&
+                              prior_id_set.find(id) == prior_id_set.end());
+    if (is_landmark) {
+      auto r = slot.emplace(id, Slot{Part::L, num_landmarks, 3});
+      num_landmarks++;
+      return &r.first->second;
+    }
+    auto r = slot.emplace(id, Slot{Part::N, n_dim, md});
+    n_dim += md;
+    return &r.first->second;
+  };
+
+  // ---- Pass 1: discover all active blocks touched by any residual, fixing n_dim and the
+  // landmark count before sizing containers. ----
+  for (const auto& res : all_residuals) {
+    const ParameterBlockCollection pars = parameters(res.residual_block_id);
+    for (const auto& p : pars) slot_of(p.second);
+  }
+
+  // ---- Containers. Dense H_aa / H_an / H_nn (window-bounded sizes); per-landmark 3x3
+  // information plus its few coupling strips to N-blocks (a landmark is observed by a
+  // handful of keyframes, so the strip list stays tiny). ----
+  Eigen::MatrixXd H_aa = Eigen::MatrixXd::Zero(num_amb, num_amb);
+  Eigen::MatrixXd H_an = Eigen::MatrixXd::Zero(num_amb, std::max(n_dim, 1));
+  Eigen::MatrixXd H_nn = Eigen::MatrixXd::Zero(std::max(n_dim, 1), std::max(n_dim, 1));
+  struct LandmarkSys {
+    Eigen::Matrix3d Hll = Eigen::Matrix3d::Zero();
+    // (n_offset, dim_n x 3 coupling block); linear find is fine at this size.
+    std::vector<std::pair<int, Eigen::MatrixXd>> strips;
+    Eigen::MatrixXd& strip(int off, int dim) {
+      for (auto& s : strips) {
+        if (s.first == off) return s.second;
+      }
+      strips.emplace_back(off, Eigen::MatrixXd::Zero(dim, 3));
+      return strips.back().second;
+    }
+  };
+  std::vector<LandmarkSys> lms(num_landmarks);
+
+  // Scatter one (row-block, col-block) contribution C into the partitioned containers.
+  // Both orderings of every pair are visited, so one-sided cases can be skipped. The
+  // partition structure guarantees no ambiguity<->landmark coupling (no residual connects
+  // them, and prior-touched landmarks were promoted to N); if it is ever violated the
+  // routine aborts cleanly rather than mis-assembling.
+  bool structure_ok = true;
+  auto scatter = [&](const Slot* sa, const Slot* sb, const Eigen::MatrixXd& C) {
+    if (sa->part == Part::A) {
+      if (sb->part == Part::A) {
+        H_aa.block(sa->offset, sb->offset, sa->dim, sb->dim) += C;
+      } else if (sb->part == Part::N) {
+        H_an.block(sa->offset, sb->offset, sa->dim, sb->dim) += C;
+      } else {
+        structure_ok = false;  // A-L coupling: partition assumption violated
+      }
+    } else if (sa->part == Part::N) {
+      if (sb->part == Part::N) {
+        H_nn.block(sa->offset, sb->offset, sa->dim, sb->dim) += C;
+      } else if (sb->part == Part::L) {
+        lms[sb->offset].strip(sa->offset, sa->dim) += C;
+      }
+      // (N,A): transpose of (A,N), added when the swapped pair is visited.
+    } else {  // sa in L
+      if (sb->part == Part::L) {
+        if (sa->offset != sb->offset) { structure_ok = false; return; }
+        lms[sa->offset].Hll += C;
+      } else if (sb->part == Part::A) {
+        structure_ok = false;  // L-A coupling: partition assumption violated
+      }
+      // (L,N): transpose of (N,L), added when the swapped pair is visited.
+    }
+  };
+
+  // ---- Pass 2: assemble H. ----
+  for (const auto& res : all_residuals) {
+    const ErrorType type = res.error_interface_ptr->typeInfo();
+
+    // Marginalization prior: scatter its information Lambda = J_^T J_ (pre-fetched in
+    // pass 0) directly -- never route the dynamically-sized prior through the generic
+    // evaluation buffers.
+    if (type == ErrorType::kMarginalizationError) {
+      const int np = static_cast<int>(prior_ids.size());
+      // Resolve each prior block to its active slot (skip fixed/absent).
+      std::vector<const Slot*> pslot(np, nullptr);
+      for (int i = 0; i < np; ++i) {
+        auto it = slot.find(prior_ids[i]);
+        if (it == slot.end()) continue;                 // fixed now / not active -> skip
+        if (static_cast<int>(prior_dim[i]) != it->second.dim) return fail("prior_layout_mismatch");
+        pslot[i] = &it->second;
+      }
+      for (int i = 0; i < np; ++i) {
+        if (!pslot[i]) continue;
+        for (int j = 0; j < np; ++j) {
+          if (!pslot[j]) continue;
+          scatter(pslot[i], pslot[j],
+                  prior_Lambda.block(prior_off[i], prior_off[j],
+                                     prior_dim[i], prior_dim[j]));
+        }
+      }
+      continue;
+    }
+
+    // Ordinary residual: evaluate minimal Jacobians (same buffer pattern as
+    // getLocalCrossInformation), then apply the loss-function correction so the assembled
+    // information matches the robustified Hessian ceres uses.
+    const ParameterBlockCollection pars = parameters(res.residual_block_id);
+    const int rdim = static_cast<int>(res.error_interface_ptr->residualDim());
+    Eigen::VectorXd residuals_eigen(rdim);
+
+    std::vector<double*> parameters_raw(pars.size());
+    std::vector<double*> jacobians_raw(pars.size());
+    std::vector<double*> jacobians_minimal_raw(pars.size());
+    std::vector<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>,
+        Eigen::aligned_allocator<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic,
+            Eigen::RowMajor>>> jac(pars.size()), jac_min(pars.size());
+    for (size_t j = 0; j < pars.size(); ++j) {
+      parameters_raw[j] = pars[j].second->parameters();
+      jac[j].resize(rdim, pars[j].second->dimension());
+      jacobians_raw[j] = jac[j].data();
+      jac_min[j].resize(rdim, pars[j].second->minimalDimension());
+      jacobians_minimal_raw[j] = jac_min[j].data();
+    }
+    res.error_interface_ptr->EvaluateWithMinimalJacobians(
+        parameters_raw.data(), residuals_eigen.data(),
+        jacobians_raw.data(), jacobians_minimal_raw.data());
+
+    if (res.loss_function_ptr) {
+      // Triggs/BANS correction (Eq. 11), identical to MarginalizationError and ceres'
+      // corrector.cc, so J^T J below equals ceres::Covariance's robustified Hessian.
+      const double sq_norm = residuals_eigen.squaredNorm();
+      double rho[3];
+      res.loss_function_ptr->Evaluate(sq_norm, rho);
+      const double sqrt_rho1 = std::sqrt(rho[1]);
+      double alpha_sq_norm = 0.0;
+      if (!(sq_norm == 0.0 || rho[2] <= 0.0)) {
+        const double D = 1.0 + 2.0 * sq_norm * rho[2] / rho[1];
+        const double alpha = 1.0 - std::sqrt(D);
+        alpha_sq_norm = alpha / sq_norm;
+      }
+      for (size_t j = 0; j < pars.size(); ++j) {
+        jac_min[j] = sqrt_rho1 * (jac_min[j] -
+            alpha_sq_norm * residuals_eigen * (residuals_eigen.transpose() * jac_min[j]));
+      }
+    }
+
+    // Resolve slots and scatter all ordered pairs.
+    std::vector<const Slot*> s(pars.size(), nullptr);
+    for (size_t j = 0; j < pars.size(); ++j) {
+      auto it = slot.find(pars[j].second->id());
+      if (it != slot.end()) s[j] = &it->second;
+    }
+    for (size_t a = 0; a < pars.size(); ++a) {
+      if (!s[a]) continue;
+      for (size_t b = 0; b < pars.size(); ++b) {
+        if (!s[b]) continue;
+        scatter(s[a], s[b], (jac_min[a].transpose() * jac_min[b]).eval());
+      }
+    }
+  }
+
+  if (!structure_ok) return fail("partition_violated");
+  H_aa = 0.5 * (H_aa + H_aa.transpose()).eval();
+  if (n_dim > 0) H_nn = 0.5 * (H_nn + H_nn.transpose()).eval();
+
+  // Propagated linear-algebra error bound of the stage-2 Schur subtraction, in the units
+  // of the reduced ambiguity information (set by the iterative-refinement loop below and
+  // enforced at the final gate).
+  double arith_err = 0.0;
+
+  // ---- Stage 1: eliminate landmark blocks, one 3x3 system at a time. Each landmark's
+  // information is rank-truncated at an eps-relative tolerance: a weak-parallax landmark's
+  // unobservable direction is dropped exactly (for a PSD Gauss-Newton sum, a null mode of
+  // H_ll has identically zero coupling rows, so the Moore-Penrose drop IS the exact
+  // marginalization of that mode). This per-block treatment is what keeps ill-conditioned
+  // landmarks from poisoning the global elimination -- the root cause of the H-level
+  // noise blow-ups observed against the ceres reference before this stage existed. ----
+  for (auto& lm : lms) {
+    const Eigen::Matrix3d Hll = 0.5 * (lm.Hll + lm.Hll.transpose());
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> esl(Hll);
+    if (esl.info() != Eigen::Success) return fail("landmark_eigen");
+    const double lmax = esl.eigenvalues().maxCoeff();
+    if (!(lmax > 0.0)) continue;  // landmark with no information: nothing to subtract
+    const double ltol = eps * 3.0 * lmax;
+    Eigen::Vector3d inv_eig = Eigen::Vector3d::Zero();
+    for (int i = 0; i < 3; ++i) {
+      const double lambda = esl.eigenvalues()(i);
+      if (lambda > ltol) inv_eig(i) = 1.0 / lambda;
+    }
+    const Eigen::Matrix3d V = esl.eigenvectors();
+    // H_nn -= B pinv(H_ll) B^T, restricted to the few N-blocks this landmark touches.
+    for (size_t i = 0; i < lm.strips.size(); ++i) {
+      const int off_i = lm.strips[i].first;
+      const Eigen::MatrixXd BiV = lm.strips[i].second * V;  // dim_i x 3
+      for (size_t j = 0; j < lm.strips.size(); ++j) {
+        const int off_j = lm.strips[j].first;
+        const Eigen::MatrixXd BjV = lm.strips[j].second * V;
+        H_nn.block(off_i, off_j, BiV.rows(), BjV.rows()).noalias() -=
+            BiV * inv_eig.asDiagonal() * BjV.transpose();
+      }
+    }
+  }
+
+  // ---- Stage 2: eliminate the remaining dense nuisance block:
+  //   S = H_aa - H_an H_nn'^{-1} H_an^T
+  // via dense LDLT (window-bounded size) on the JACOBI-EQUILIBRATED system: H_nn mixes
+  // states with wildly different information scales (position vs bias vs clock), so raw
+  // condition numbers reflect unit scaling, not degeneracy. Symmetric diagonal scaling
+  // Hs = D^-1 H_nn D^-1 with D = sqrt(diag(H_nn)) removes the unit artifact (the same
+  // preconditioner pattern MarginalizationError::updateErrorComputation uses); the
+  // equilibration cancels exactly in T = rhs_s^T Y = H_an H_nn^-1 H_an^T. Numerical
+  // trust is enforced NOT by an a-priori condition-number gate but by iterative
+  // refinement (below): the last increment's propagated effect on the Schur term
+  // (arith_err) must fall below the reduced information's smallest eigenvalue at the
+  // final gate, else we ABSTAIN (caller falls back to the shadow covariance). This is
+  // self-validating -- on an eps-unresolvable system the increments do not shrink and
+  // the gate rejects. All thresholds are machine-precision-derived, not tuned. ----
+  Eigen::MatrixXd S;
+  if (n_dim == 0) {
+    S = H_aa;  // no nuisance states in the active graph (tiny/degenerate window)
+  } else {
+    // Jacobi equilibration (guard non-positive diagonals; PSD structure implies such a
+    // state's whole row is zero, and the residual/condition gates below handle it).
+    Eigen::VectorXd p_inv(n_dim);
+    for (int i = 0; i < n_dim; ++i) {
+      const double d = H_nn(i, i);
+      p_inv(i) = d > 0.0 ? 1.0 / std::sqrt(d) : 1.0;
+    }
+    const Eigen::MatrixXd Hs =
+        p_inv.asDiagonal() * H_nn * p_inv.asDiagonal();
+    const Eigen::MatrixXd rhs_s = p_inv.asDiagonal() * H_an.transpose();
+
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(0.5 * (Hs + Hs.transpose()));
+    if (ldlt.info() != Eigen::Success) return fail("nuisance_ldlt");
+    Eigen::MatrixXd Y = ldlt.solve(rhs_s);
+    if (!Y.allFinite()) return fail("nuisance_solve_nonfinite");
+
+    // Iterative refinement -- self-validating arithmetic. Refinement of an LDLT solve
+    // converges iff the (equilibrated) system is resolvable in double precision; the last
+    // increment dY bounds the remaining linear-algebra error. We propagate that bound to
+    // the Schur complement (dT below) and, at the final gate, accept only when it is
+    // provably below the reduced information's smallest eigenvalue -- i.e. when the
+    // arithmetic error cannot materially change Q_aa. On a genuinely singular or
+    // eps-unresolvable system the increments do not shrink and the gate rejects. No
+    // tuned constants: the criterion is convergence itself.
+    for (int it = 0; it < 3; ++it) {
+      const Eigen::MatrixXd R = rhs_s - Hs * Y;
+      const Eigen::MatrixXd dY = ldlt.solve(R);
+      if (!dY.allFinite()) return fail("refine_nonfinite");
+      Y += dY;
+      arith_err = (rhs_s.transpose() * dY).norm();
+    }
+    const Eigen::MatrixXd T = rhs_s.transpose() * Y;  // = H_an H_nn'^-1 H_an^T
+    if (!T.allFinite()) return fail("schur_nonfinite");
+    S = H_aa - T;
+  }
+  S = 0.5 * (S + S.transpose()).eval();
+
+  // ---- Invert with a strict positive-definite gate: eps-relative roundoff tolerance
+  // plus the propagated linear-algebra error bound (no jitter, no tuned constants). ----
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(S);
+  if (es.info() != Eigen::Success) return fail("final_eigen");
+  const double maxev = es.eigenvalues().maxCoeff();
+  if (!(maxev > 0.0) || !S.allFinite()) return fail("final_nonfinite");
+  const double tol = std::max(eps * num_amb * maxev, arith_err);
+  if (es.eigenvalues().minCoeff() <= tol) return fail("final_below_arith_err");
+  Q_aa = es.eigenvectors() * es.eigenvalues().cwiseInverse().asDiagonal()
+       * es.eigenvectors().transpose();
+  Q_aa = 0.5 * (Q_aa + Q_aa.transpose()).eval();
+  if (!Q_aa.allFinite()) return fail("qaa_nonfinite");
   return true;
 }
 
@@ -947,37 +1319,86 @@ bool Graph::computeCovariance(
     }
   }
 
-  // Compute covariance
-  ceres::Covariance::Options options;
-  // it can deal with rank deficient problem but very slow
+  const auto extract_covariance =
+    [&](const char* method, const ceres::Covariance& covariance_handle,
+        Eigen::MatrixXd& output) -> bool {
+      output = Eigen::MatrixXd::Zero(parameter_size, parameter_size);
+      for (size_t i = 0; i < parameters.size(); i++) {
+        for (size_t j = i; j < parameters.size(); j++) {
+          size_t size_i = parameter_block_sizes[i];
+          size_t size_j = parameter_block_sizes[j];
+          size_t start_i = parameter_block_starts[i];
+          size_t start_j = parameter_block_starts[j];
+          const double* para_i = parameters[i];
+          const double* para_j = parameters[j];
+          Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+            cov_i_j(size_i, size_j);
+          cov_i_j.setZero();
+          if (!covariance_handle.GetCovarianceBlock(para_i, para_j,
+                                                    cov_i_j.data())) {
+            LOG(WARNING) << "Failed to extract covariance block with "
+                         << method << ": block " << i << ", " << j;
+            return false;
+          }
+          if (!cov_i_j.allFinite()) {
+            LOG(WARNING) << "Non-finite covariance block from "
+                         << method << ": block " << i << ", " << j;
+            return false;
+          }
+          output.block(start_i, start_j, size_i, size_j) = cov_i_j;
+          output.block(start_j, start_i, size_j, size_i) = cov_i_j.transpose();
+        }
+      }
+      output = 0.5 * (output + output.transpose());
+      if (!output.allFinite()) {
+        LOG(WARNING) << "Non-finite covariance matrix from " << method << ".";
+        return false;
+      }
+      return true;
+    };
+
+  const auto compute_with_options =
+    [&](bool dense_svd, Eigen::MatrixXd& output) -> bool {
+      ceres::Covariance::Options options;
+      const char* method = "SPARSE_QR";
+      if (dense_svd) {
+        method = "DENSE_SVD";
+        options.algorithm_type = ceres::DENSE_SVD;
+        // Let Ceres detect and drop all numerically unobservable modes. This
+        // gives the Moore-Penrose covariance for gauge/rank-deficient graphs.
+        options.null_space_rank = -1;
+      }
+
+      ceres::Covariance covariance_handle(options);
+      if (!covariance_handle.Compute(covariance_blocks, problem_.get())) {
+        return false;
+      }
+      return extract_covariance(method, covariance_handle, output);
+    };
+
   if (use_dense_svd) {
-    options.algorithm_type = ceres::DENSE_SVD;
-    options.null_space_rank = -1; 
-  }
-  ceres::Covariance covariance_handle(options);
-  if (!covariance_handle.Compute(covariance_blocks, problem_.get())) {
-    LOG(WARNING) << "Failed to compute covariance!";
-    return false;
-  }
-
-  // Get covariance
-  covariance.resize(parameter_size, parameter_size);
-  for (size_t i = 0; i < parameters.size(); i++) {
-    for (size_t j = i; j < parameters.size(); j++) {
-      size_t size_i = parameter_block_sizes[i];
-      size_t size_j = parameter_block_sizes[j];
-      size_t start_i = parameter_block_starts[i];
-      size_t start_j = parameter_block_starts[j];
-      const double* para_i = parameters[i];
-      const double* para_j = parameters[j];
-      Eigen::MatrixXd cov_i_j = Eigen::MatrixXd::Zero(size_i, size_j);
-      covariance_handle.GetCovarianceBlock(para_i, para_j, cov_i_j.data());
-      covariance.block(start_i, start_j, size_i, size_j) = cov_i_j;
-      covariance.block(start_j, start_i, size_j, size_i) = cov_i_j.transpose();
+    if (!compute_with_options(true, covariance)) {
+      LOG(WARNING) << "Failed to compute covariance with DENSE_SVD.";
+      return false;
     }
+    return true;
   }
 
-  return true;
+  if (compute_with_options(false, covariance)) {
+    return true;
+  }
+
+  LOG(WARNING) << "Sparse covariance failed, retrying with DENSE_SVD "
+               << "to handle gauge/rank deficiency.";
+  if (compute_with_options(true, covariance)) {
+    LOG(INFO) << "Recovered covariance with DENSE_SVD fallback for "
+              << parameter_block_ids.size() << " parameter blocks "
+              << "(" << parameter_size << " scalar parameters).";
+    return true;
+  }
+
+  LOG(WARNING) << "Failed to compute covariance with SPARSE_QR and DENSE_SVD.";
+  return false;
 }
 
 // Evaluate all residual blocks and get total cost
@@ -998,4 +1419,3 @@ double Graph::computeTotalCost(bool apply_loss_function)
 }
 
 }  //namespace gici
-

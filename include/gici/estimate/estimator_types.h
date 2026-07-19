@@ -447,7 +447,13 @@ enum class EstimatorType {
   SppImuCameraRrr,
   DgnssImuCameraRrr,
   RtkImuCameraRrr,
-  PppImuCameraRrr
+  PppImuCameraRrr,
+  // research/vision-aided-ambiguity-resolution: RTK/IMU/Camera RRR variant whose
+  // ambiguity-resolution covariance is derived from the joint graph's local
+  // cross-information including the current camera keyframe (cPose), so genuine
+  // visual information enters AR. Subclass of RtkImuCameraRrr; leaves the original
+  // estimator/type (and thus the frozen baselines) byte-untouched.
+  RtkImuCameraRrrVa
 };
 
 // Convert from estimator type to string

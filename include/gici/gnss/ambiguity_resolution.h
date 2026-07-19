@@ -47,6 +47,35 @@ struct AmbiguityResolutionOptions {
 
   // Ambiguity fixation ratio for LAMBDA
   double ratio = 3.0;
+
+  // research/vision-aided-ambiguity-resolution (opt-in; default off preserves upstream
+  // behavior byte-identically):
+  //
+  // Joint post-fix validation: extend the existing accept rule (reject when the GNSS
+  // range cost increases after applying the fixation constraints) to ALSO reject when
+  // the joint vision+IMU cost (reprojection + IMU preintegration residuals, robustified,
+  // excluding the fixation constraints themselves) increases. Zero-threshold, exactly
+  // mirroring the upstream rule -- no new tuned constants. A subtly-wrong integer that
+  // still matches GNSS ranges bends the trajectory against vision/IMU and gets vetoed
+  // at acceptance time.
+  bool use_joint_cost_validation = false;
+
+  // Integer-bootstrapping success-rate gate: only attempt/accept a (partial) fixation
+  // subset whose theoretical success rate P_s = prod(2*Phi(1/(2*sigma_i)) - 1)
+  // (Teunissen integer bootstrapping, computed on the LAMBDA-decorrelated conditional
+  // variances of the float covariance) is at least this value. 0 disables (upstream
+  // behavior). This is a probabilistic specification (failure-rate budget), declared
+  // a priori -- not a threshold fitted to any dataset.
+  double min_bootstrap_success_rate = 0.0;
+
+  // Decision-confidence-weighted fix constraints (research/PREREG_SOFT_WEIGHT.md):
+  // replace the hard-coded constraint information (1e6 cycle^-2, std 0.001 cycles)
+  // with information(P_s) = 1 / [(1 - P_s) * 1 + P_s * 1e-6] cycle^-2, the Gaussian
+  // moment match of the integer decision mixture (correct w.p. P_s with upstream's
+  // baseline variance; wrong w.p. 1-P_s with ~1-cycle error). No free parameters:
+  // P_s is the bootstrapping success rate of the exact accepted subset. Default
+  // false = upstream byte-identical.
+  bool use_success_rate_fix_information = false;
 };
 
 // Ambiguity resolution (AR)
@@ -267,6 +296,19 @@ private:
 
   // Compute pseudorange and phasernage total cost in current epoch
   double computeRangeCost(const BackendId& epoch_id);
+
+  // research/vision-aided-ambiguity-resolution: robustified total cost of the joint
+  // vision+IMU residuals (kReprojectionError + kIMUError) over the whole active graph,
+  // excluding GNSS and the fixation constraints. Used by the opt-in joint post-fix
+  // validation (see AmbiguityResolutionOptions::use_joint_cost_validation).
+  double computeJointNonGnssCost();
+
+  // research/vision-aided-ambiguity-resolution: theoretical integer-bootstrapping
+  // success rate P_s of a float-ambiguity covariance, computed on the LAMBDA-
+  // decorrelated conditional variances (LD factorization + integer Gauss reduction,
+  // ported from the vendored RTKLIB lambda.c). Used by the opt-in
+  // min_bootstrap_success_rate gate.
+  static double bootstrapSuccessRate(const Eigen::MatrixXd& covariance);
 
   // Check if it is the first epoch
   bool isFirstEpoch() { return ambiguities_.size() < 2; }

@@ -3,10 +3,9 @@
 # This is the file-mode counterpart of ros2_wrapper/.../config/ros_urbannav.yaml:
 # the `estimate:` block below is byte-for-byte identical to the ROS 2 est_gnss
 # estimator, but the input comes from RINEX files (type: post-file) instead of ROS
-# topics. Post-file mode loads the whole session, so the run produces the FULL
-# trajectory and only aborts on the known upstream teardown CHECK (harmless: the
-# solution file is already flushed). The ROS streaming path segfaults after the
-# first epoch on the same f2b8579 core, so use this config to reproduce results.
+# topics. Post-file mode loads the whole session, so the run should produce the FULL
+# trajectory cleanly. Treat crash and timeout exits as failures; do not lock partial
+# solution files.
 #
 # Placeholders (<...>) are substituted by scripts/run_urbannav_rtk_filemode.sh.
 stream:
