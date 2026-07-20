@@ -32,15 +32,41 @@ Arms:
 - `va` — VA fast marginal covariance, **benchmark OFF** (the method; fast).
 - `va_bench` — VA **+ per-epoch fast-vs-ceres equivalence logging** (benchmark ON; ~10× slower).
 
-### 1A. Run baseline + VA (fast) on all 12 boards, n=3  ← main sweep
+### 1A. À LA CARTE — one board at a time (run whenever you're free)
+Every command writes into the SAME out-root `results/research/gici_canonical/`, so the
+result set **accumulates** across days. Each is independent + resumable (finished runs skip
+via `.done`). Run board 1.1 today, 1.2 tomorrow, etc. — order does not matter.
+
+Pattern (arg 4 = the board):
 ```bash
 cd /home/theph/ws_ncs/gici_vision_aided_ar
-nohup scripts/run_gici_canonical.sh \
-      results/research/gici_canonical 3 "baseline va" \
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "<BOARD>"
+```
+Copy-paste, one board per session (each does baseline + VA, 3 runs = 6 gici_main; small
+boards ~1–2 h, **5.1/5.2 much longer**):
+```bash
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "1.1"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "1.2"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "2.1"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "2.2"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "3.1"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "3.2"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "3.3"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "4.1"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "4.2"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "4.3"
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "5.1"   # large
+scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" "5.2"   # large
+```
+Run in the background if you want to close the terminal:
+`nohup <the command> >> results/research/gici_canonical.nohup 2>&1 &`
+Output: `results/research/gici_canonical/<board>/{baseline,va}/run{1,2,3}/`.
+
+**Alternative — all 12 in one go** (unattended, still solo internally):
+```bash
+nohup scripts/run_gici_canonical.sh results/research/gici_canonical 3 "baseline va" \
    > results/research/gici_canonical.nohup 2>&1 &
 ```
-Output: `results/research/gici_canonical/<board>/{baseline,va}/run{1,2,3}/`
-(72 runs: 12×2×3). Solo, resumable — safe to Ctrl-C and relaunch (finished runs skip).
 
 ### 1B. VA equivalence benchmark (fast Q_aa vs exact ceres) — pick ONE scope
 This produces Table 1 (the consistency headline). It is slow (ceres every AR epoch).
@@ -97,22 +123,29 @@ Runners (Python; each takes `<dataset> --out-root <dir>`; dataset ∈ deep/mediu
 `run_urbannav_rrr_rfcva.py` (RF-Cauchy boundary), `run_urbannav_rrr_rfva.py`
 (RF-Tukey boundary, expected crash — recorded), `run_urbannav_rrr_va.py` (VA-v2 context).
 
-### 2A. Main arms, n=3, per dataset (SOLO — one at a time)
+### 2A. À LA CARTE — one dataset (× its arms × 3 runs) per session
+Same idea: run `medium` one day, `deep` another, `harsh` another. All accumulate under
+`results/research/urbannav_canonical/`. SOLO (one at a time). Each line below does the 3
+runs for one (dataset, arm); resume-safe (skips a run whose solution.txt exists).
+
+Runner map: `baseline`→`run_urbannav_rrr_baseline.py`, `va4`→`run_urbannav_rrr_va4.py`,
+`rfcva`→`run_urbannav_rrr_rfcva.py` (add `va`/`rfva` for context arms if wanted).
+
 ```bash
 cd /home/theph/ws_ncs/gici_vision_aided_ar
-for ds in deep medium harsh; do
+# --- pick ONE dataset (ds) and run its arms, 3x each ---
+ds=medium        # or: deep | harsh
+for arm_py in baseline:baseline va4:va4 rfcva:rfcva; do
+  arm="${arm_py%%:*}"; py="run_urbannav_rrr_${arm_py##*:}.py"
   for k in 1 2 3; do
-    for arm in baseline va4 rfcva; do
-      out="results/research/urbannav_canonical/$ds/$arm/run$k"
-      [ -f "$out/$ds/output/solution.txt" ] && continue    # crude resume
-      python3 "scripts/run_urbannav_rrr_${arm/baseline/baseline}.py" "$ds" --out-root "$out"
-    done
+    out="results/research/urbannav_canonical/$ds/$arm/run$k"
+    [ -f "$out/$ds/output/solution.txt" ] && { echo "skip $ds $arm run$k"; continue; }
+    python3 "scripts/$py" "$ds" --out-root "$out"
   done
 done
 ```
-(Adjust arm list as needed. `baseline`→`run_urbannav_rrr_baseline.py`,
-`va4`→`run_urbannav_rrr_va4.py`, `rfcva`→`run_urbannav_rrr_rfcva.py`.)
-Harsh auto-applies its GT quality gate (`gt_q_max=2`) + eval window inside the runner.
+Change `ds=` and rerun next day. Harsh auto-applies its GT quality gate (`gt_q_max=2`) +
+eval window inside the runner.
 
 ### 2B. Evaluate + assemble tables (mean±std)
 ```bash
