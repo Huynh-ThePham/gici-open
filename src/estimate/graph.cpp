@@ -257,12 +257,18 @@ bool Graph::getLocalCrossInformation(
     }
 
     // Side-effect-free observer: suppress in-place IMU relinearization (no-op otherwise).
-    res.error_interface_ptr->setSuppressRelinearization(true);
-    res.error_interface_ptr->EvaluateWithMinimalJacobians(parameters_raw,
-                                                           residuals_raw,
-                                                           jacobians_raw,
-                                                           jacobians_minimal_raw);
-    res.error_interface_ptr->setSuppressRelinearization(false);
+    // RAII so the flag is restored even if EvaluateWithMinimalJacobians throws.
+    {
+      struct RelinOne {
+        ErrorInterface* e;
+        explicit RelinOne(ErrorInterface* p) : e(p) { e->setSuppressRelinearization(true); }
+        ~RelinOne() { e->setSuppressRelinearization(false); }
+      } relin_one(res.error_interface_ptr.get());
+      res.error_interface_ptr->EvaluateWithMinimalJacobians(parameters_raw,
+                                                             residuals_raw,
+                                                             jacobians_raw,
+                                                             jacobians_minimal_raw);
+    }
 
     for (size_t a = 0; a < pars.size(); ++a) {
       if (local_index[a] < 0) continue;
@@ -501,11 +507,17 @@ bool Graph::getMarginalAmbiguityCovariance(
     // Side-effect-free observer: do not let an IMU factor relinearize in place while we
     // assemble the marginal covariance (that would move the graph linearization and
     // perturb the next optimize()). No-op for non-IMU factors.
-    res.error_interface_ptr->setSuppressRelinearization(true);
-    res.error_interface_ptr->EvaluateWithMinimalJacobians(
-        parameters_raw.data(), residuals_eigen.data(),
-        jacobians_raw.data(), jacobians_minimal_raw.data());
-    res.error_interface_ptr->setSuppressRelinearization(false);
+    // RAII: restore the suppress flag even if EvaluateWithMinimalJacobians throws.
+    {
+      struct RelinOne {
+        ErrorInterface* e;
+        explicit RelinOne(ErrorInterface* p) : e(p) { e->setSuppressRelinearization(true); }
+        ~RelinOne() { e->setSuppressRelinearization(false); }
+      } relin_one(res.error_interface_ptr.get());
+      res.error_interface_ptr->EvaluateWithMinimalJacobians(
+          parameters_raw.data(), residuals_eigen.data(),
+          jacobians_raw.data(), jacobians_minimal_raw.data());
+    }
 
     if (res.loss_function_ptr) {
       // Triggs/BANS correction (Eq. 11), identical to MarginalizationError and ceres'

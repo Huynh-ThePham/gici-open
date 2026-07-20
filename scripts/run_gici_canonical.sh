@@ -32,10 +32,17 @@ GICI_MAIN="${GICI_MAIN:-${REPO}/build/gici_main}"
 BL_TMPL="${REPO}/research/config/rtk_imu_camera_rrr_1_1.yaml"
 VA_TMPL="${REPO}/research/config/rtk_imu_camera_rrr_va_1_1.yaml"   # benchmark ON as shipped
 
-STALL_S="${STALL_S:-25}"      # solution stable this long => done
-MIN_FLOOR="${MIN_FLOOR:-100}" # need at least this many solution lines to count as progress
-NOEPH_S="${NOEPH_S:-360}"     # if 0 lines this long => ephemeris stall, give up fast
-MAX_WALL="${MAX_WALL:-3000}"  # hard per-run ceiling
+# Completion is decided by REASON, not by a flat line count (a truncated run must never be
+# marked .done). Real completion = the input streams are exhausted and gici_main goes idle
+# (its known post-EOF SIGINT-ignore hang): process still ALIVE but no new solution line for
+# STALL_S. A crash (process dies) or a MAX_WALL/eph timeout is NOT completion -> retried.
+STALL_S="${STALL_S:-150}"     # process-alive + no growth this long => EOF reached (generous;
+                              #   a mid-stream gap this long is implausible on backpressure-paced replay)
+MIN_FLOOR="${MIN_FLOOR:-500}" # sanity floor: fewer lines than this is a broken run, never .done
+NOEPH_S="${NOEPH_S:-600}"     # 0 lines this long => ephemeris stall / slow first-fix -> abort (no .done)
+MAX_WALL="${MAX_WALL:-21600}" # 6 h hard ceiling (large boards 5.1/5.2); hitting it => FAILED, never .done
+# Reference full lengths (lines): GICI board 1.1 = 7100. Others recorded per-run in status.txt;
+# compare siblings across the 3 runs at eval time to catch any truncation.
 
 LOG="${OUT_ROOT}/run_gici_canonical.log"
 mkdir -p "$OUT_ROOT"
@@ -72,22 +79,33 @@ run_one() {  # board arm k
   mark "RUN  ${board} ${arm} run${k}"
   "$GICI_MAIN" "$cfg" > "${out}/log/run.stdout" 2> "${out}/log/run.stderr" &
   local pid=$!
-  local t0=$SECONDS last=0 last_t=$SECONDS n
+  local t0=$SECONDS last=0 last_t=$SECONDS n reason=""
   while kill -0 "$pid" 2>/dev/null; do
     sleep 5
     n=0; [[ -s "$sol" ]] && n="$(wc -l < "$sol")"
     if (( n > last )); then last=$n; last_t=$SECONDS; fi
-    if (( n >= MIN_FLOOR && SECONDS - last_t >= STALL_S )); then kill -INT "$pid" 2>/dev/null; break; fi
-    if (( n == 0 && SECONDS - t0 >= NOEPH_S )); then mark "  !! ${board} ${arm} run${k} NO-OUTPUT ${NOEPH_S}s (eph stall?) -> abort"; kill -INT "$pid" 2>/dev/null; break; fi
-    if (( SECONDS - t0 >= MAX_WALL )); then mark "  !! ${board} ${arm} run${k} MAX_WALL -> stop"; kill -INT "$pid" 2>/dev/null; break; fi
+    # genuine completion: still ALIVE + output quiet for STALL_S (EOF idle) + past sanity floor
+    if (( n >= MIN_FLOOR && SECONDS - last_t >= STALL_S )); then reason=STALL_COMPLETE; kill -INT "$pid" 2>/dev/null; break; fi
+    if (( n == 0 && SECONDS - t0 >= NOEPH_S )); then reason=NOEPH; mark "  !! ${board} ${arm} run${k} NO-OUTPUT ${NOEPH_S}s (eph stall / slow first-fix) -> abort"; kill -INT "$pid" 2>/dev/null; break; fi
+    if (( SECONDS - t0 >= MAX_WALL )); then reason=MAXWALL; mark "  !! ${board} ${arm} run${k} MAX_WALL ${MAX_WALL}s -> stop (NOT complete)"; kill -INT "$pid" 2>/dev/null; break; fi
   done
+  # loop exited on its own => process ended without our SIGINT (crash or, on some builds, clean exit)
+  [[ -z "$reason" ]] && reason=DIED
   # gici_main can ignore SIGINT after completion; escalate after grace
   local g; for g in $(seq 1 15); do kill -0 "$pid" 2>/dev/null || break; sleep 2; done
   kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
   n=0; [[ -s "$sol" ]] && n="$(wc -l < "$sol")"
-  local vaar; vaar="$(grep -c '\[vaar-fast\]' "${out}/log/run.stderr" 2>/dev/null || echo 0)"
-  mark "DONE ${board} ${arm} run${k}: lines=${n} vaar=${vaar} wall=$((SECONDS - t0))s"
-  if (( n >= MIN_FLOOR )); then touch "${out}/.done"; else mark "  WARN ${board} ${arm} run${k} INCOMPLETE (${n} lines)"; fi
+  local vaar; vaar=0; grep -q '\[vaar-fast\]' "${out}/log/run.stderr" 2>/dev/null && vaar="$(grep -c '\[vaar-fast\]' "${out}/log/run.stderr")"
+  printf 'reason=%s lines=%s vaar=%s wall=%ss\n' "$reason" "$n" "$vaar" "$((SECONDS - t0))" > "${out}/status.txt"
+  # Mark .done ONLY on a genuine EOF-idle completion past the sanity floor. MAXWALL / NOEPH /
+  # DIED(crash) / sub-floor are left WITHOUT .done so the next invocation retries them, and are
+  # never silently accepted as a finished (possibly truncated) run.
+  if [[ "$reason" == STALL_COMPLETE ]] && (( n >= MIN_FLOOR )); then
+    touch "${out}/.done"
+    mark "DONE ${board} ${arm} run${k}: COMPLETE lines=${n} vaar=${vaar} wall=$((SECONDS - t0))s"
+  else
+    mark "INCOMPLETE ${board} ${arm} run${k}: reason=${reason} lines=${n} wall=$((SECONDS - t0))s (WILL RETRY)"
+  fi
 }
 
 mark "GICI_CANONICAL_START out=${OUT_ROOT} nruns=${NRUNS} arms='${ARMS}' boards='${BOARDS}'"
