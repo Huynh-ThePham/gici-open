@@ -8,8 +8,10 @@
 **/
 #include "gici/fusion/rtk_imu_camera_rrr_estimator.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
+#include <limits>
 
 #include "gici/gnss/position_error.h"
 
@@ -952,8 +954,19 @@ bool RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance(
   // e.g. an ambiguity just added with no phase observation yet, or an attitude component
   // needing multi-epoch IMU integration to become observable), bail out and let the
   // caller fall back to the plain GNSS-only shadow covariance.
+  if (local_information.rows() == 0 || local_information.rows() != local_information.cols() ||
+      !local_information.allFinite()) {
+    return false;
+  }
+  local_information = 0.5 * (local_information + local_information.transpose()).eval();
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(local_information);
-  if (es.info() != Eigen::Success || es.eigenvalues().minCoeff() < 1e-9) {
+  if (es.info() != Eigen::Success) return false;
+  const double maxev = es.eigenvalues().maxCoeff();
+  if (!(maxev > 0.0)) return false;
+  const int local_dim = static_cast<int>(local_information.rows());
+  const double tol = std::numeric_limits<double>::epsilon() *
+                     static_cast<double>(std::max(1, local_dim)) * maxev;
+  if (es.eigenvalues().minCoeff() <= tol) {
     return false;
   }
   Eigen::MatrixXd local_covariance = es.eigenvectors()
@@ -967,7 +980,8 @@ bool RtkImuCameraRrrEstimator::estimateVisionAidedAmbiguityCovariance(
   // information reshapes the ambiguity uncertainty used for AR -- rather than treating
   // position as if known exactly the way the plain shadow covariance implicitly does.
   covariance = local_covariance.topLeftCorner(num_ambiguities, num_ambiguities);
-  return true;
+  covariance = 0.5 * (covariance + covariance.transpose()).eval();
+  return covariance.allFinite();
 }
 
 };

@@ -44,8 +44,10 @@
 #include "gici/estimate/graph.h"
 
 #include <ceres/ordered_groups.h>
-#include <unordered_set>
+#include <algorithm>
+#include <cmath>
 #include <limits>
+#include <unordered_set>
 #include <vector>
 
 #include "gici/estimate/homogeneous_point_parameter_block.h"
@@ -340,6 +342,26 @@ bool Graph::getMarginalAmbiguityCovariance(
     if (!prior->marginalizationInformation(prior_ids, prior_off, prior_dim, prior_Lambda)) {
       return fail("prior_info_unavailable");
     }
+    if (prior_ids.size() != prior_off.size() || prior_ids.size() != prior_dim.size()) {
+      return fail("prior_layout_mismatch");
+    }
+    if (prior_Lambda.rows() != prior_Lambda.cols() || !prior_Lambda.allFinite()) {
+      return fail("prior_info_invalid");
+    }
+    const size_t prior_cols = static_cast<size_t>(prior_Lambda.cols());
+    for (size_t i = 0; i < prior_ids.size(); ++i) {
+      if (prior_dim[i] > prior_cols || prior_off[i] > prior_cols - prior_dim[i]) {
+        return fail("prior_layout_mismatch");
+      }
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> esp(
+        0.5 * (prior_Lambda + prior_Lambda.transpose()), Eigen::EigenvaluesOnly);
+    if (esp.info() != Eigen::Success) return fail("prior_eigen");
+    const double prior_absmax = esp.eigenvalues().cwiseAbs().maxCoeff();
+    const int prior_dim_total = static_cast<int>(prior_Lambda.cols());
+    const double prior_tol =
+        eps * static_cast<double>(std::max(1, prior_dim_total)) * prior_absmax;
+    if (esp.eigenvalues().minCoeff() < -prior_tol) return fail("prior_not_psd");
     have_prior = true;
   }
   std::unordered_set<uint64_t> prior_id_set(prior_ids.begin(), prior_ids.end());
@@ -508,33 +530,46 @@ bool Graph::getMarginalAmbiguityCovariance(
     // assemble the marginal covariance (that would move the graph linearization and
     // perturb the next optimize()). No-op for non-IMU factors.
     // RAII: restore the suppress flag even if EvaluateWithMinimalJacobians throws.
+    bool evaluate_ok = false;
     {
       struct RelinOne {
         ErrorInterface* e;
         explicit RelinOne(ErrorInterface* p) : e(p) { e->setSuppressRelinearization(true); }
         ~RelinOne() { e->setSuppressRelinearization(false); }
       } relin_one(res.error_interface_ptr.get());
-      res.error_interface_ptr->EvaluateWithMinimalJacobians(
+      evaluate_ok = res.error_interface_ptr->EvaluateWithMinimalJacobians(
           parameters_raw.data(), residuals_eigen.data(),
           jacobians_raw.data(), jacobians_minimal_raw.data());
+    }
+    if (!evaluate_ok) return fail("residual_evaluate");
+    if (!residuals_eigen.allFinite()) return fail("residual_nonfinite");
+    for (const auto& J : jac_min) {
+      if (!J.allFinite()) return fail("jacobian_nonfinite");
     }
 
     if (res.loss_function_ptr) {
       // Triggs/BANS correction (Eq. 11), identical to MarginalizationError and ceres'
       // corrector.cc, so J^T J below equals ceres::Covariance's robustified Hessian.
       const double sq_norm = residuals_eigen.squaredNorm();
+      if (!std::isfinite(sq_norm)) return fail("loss_residual_nonfinite");
       double rho[3];
       res.loss_function_ptr->Evaluate(sq_norm, rho);
+      if (!std::isfinite(rho[0]) || !std::isfinite(rho[1]) ||
+          !std::isfinite(rho[2]) || !(rho[1] > 0.0)) {
+        return fail("loss_invalid");
+      }
       const double sqrt_rho1 = std::sqrt(rho[1]);
       double alpha_sq_norm = 0.0;
       if (!(sq_norm == 0.0 || rho[2] <= 0.0)) {
         const double D = 1.0 + 2.0 * sq_norm * rho[2] / rho[1];
+        if (!std::isfinite(D) || D < 0.0) return fail("loss_triggs_invalid");
         const double alpha = 1.0 - std::sqrt(D);
         alpha_sq_norm = alpha / sq_norm;
       }
       for (size_t j = 0; j < pars.size(); ++j) {
         jac_min[j] = sqrt_rho1 * (jac_min[j] -
             alpha_sq_norm * residuals_eigen * (residuals_eigen.transpose() * jac_min[j]));
+        if (!jac_min[j].allFinite()) return fail("loss_jacobian_nonfinite");
       }
     }
 
@@ -556,6 +591,9 @@ bool Graph::getMarginalAmbiguityCovariance(
   if (!structure_ok) return fail("partition_violated");
   H_aa = 0.5 * (H_aa + H_aa.transpose()).eval();
   if (n_dim > 0) H_nn = 0.5 * (H_nn + H_nn.transpose()).eval();
+  if (!H_aa.allFinite() || !H_an.allFinite() || (n_dim > 0 && !H_nn.allFinite())) {
+    return fail("assembled_nonfinite");
+  }
 
   // Propagated linear-algebra error bound of the stage-2 Schur subtraction, in the units
   // of the reduced ambiguity information (set by the iterative-refinement loop below and
@@ -573,26 +611,53 @@ bool Graph::getMarginalAmbiguityCovariance(
     const Eigen::Matrix3d Hll = 0.5 * (lm.Hll + lm.Hll.transpose());
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> esl(Hll);
     if (esl.info() != Eigen::Success) return fail("landmark_eigen");
-    const double lmax = esl.eigenvalues().maxCoeff();
+    const Eigen::Vector3d evals = esl.eigenvalues();
+    const double hll_absmax = evals.cwiseAbs().maxCoeff();
+    const double hll_tol = eps * 3.0 * hll_absmax;
+    if (evals.minCoeff() < -hll_tol) return fail("landmark_not_psd");
+    const double lmax = evals.maxCoeff();
+    const double ltol = (lmax > 0.0) ? eps * 3.0 * lmax : 0.0;
+    const Eigen::Matrix3d V = esl.eigenvectors();
+    std::vector<std::pair<int, Eigen::MatrixXd>> strips_v;
+    strips_v.reserve(lm.strips.size());
+    double coupling_sq = 0.0;
+    double dropped_coupling_sq = 0.0;
+    int coupling_rows = 0;
+    for (const auto& strip : lm.strips) {
+      const Eigen::MatrixXd BiV = strip.second * V;  // dim_i x 3
+      coupling_sq += BiV.squaredNorm();
+      coupling_rows += static_cast<int>(BiV.rows());
+      for (int k = 0; k < 3; ++k) {
+        if (evals(k) <= ltol) dropped_coupling_sq += BiV.col(k).squaredNorm();
+      }
+      strips_v.emplace_back(strip.first, BiV);
+    }
+    const double coupling_norm = std::sqrt(coupling_sq);
+    const double dropped_coupling_norm = std::sqrt(dropped_coupling_sq);
+    const double range_tol =
+        eps * static_cast<double>(std::max(1, coupling_rows + 3)) * coupling_norm;
+    if (dropped_coupling_norm > range_tol) return fail("landmark_null_coupling");
     if (!(lmax > 0.0)) continue;  // landmark with no information: nothing to subtract
-    const double ltol = eps * 3.0 * lmax;
     Eigen::Vector3d inv_eig = Eigen::Vector3d::Zero();
     for (int i = 0; i < 3; ++i) {
-      const double lambda = esl.eigenvalues()(i);
+      const double lambda = evals(i);
       if (lambda > ltol) inv_eig(i) = 1.0 / lambda;
     }
-    const Eigen::Matrix3d V = esl.eigenvectors();
     // H_nn -= B pinv(H_ll) B^T, restricted to the few N-blocks this landmark touches.
-    for (size_t i = 0; i < lm.strips.size(); ++i) {
-      const int off_i = lm.strips[i].first;
-      const Eigen::MatrixXd BiV = lm.strips[i].second * V;  // dim_i x 3
-      for (size_t j = 0; j < lm.strips.size(); ++j) {
-        const int off_j = lm.strips[j].first;
-        const Eigen::MatrixXd BjV = lm.strips[j].second * V;
+    for (size_t i = 0; i < strips_v.size(); ++i) {
+      const int off_i = strips_v[i].first;
+      const Eigen::MatrixXd& BiV = strips_v[i].second;
+      for (size_t j = 0; j < strips_v.size(); ++j) {
+        const int off_j = strips_v[j].first;
+        const Eigen::MatrixXd& BjV = strips_v[j].second;
         H_nn.block(off_i, off_j, BiV.rows(), BjV.rows()).noalias() -=
             BiV * inv_eig.asDiagonal() * BjV.transpose();
       }
     }
+  }
+  if (n_dim > 0) {
+    H_nn = 0.5 * (H_nn + H_nn.transpose()).eval();
+    if (!H_nn.allFinite()) return fail("landmark_schur_nonfinite");
   }
 
   // ---- Stage 2: eliminate the remaining dense nuisance block:
@@ -623,9 +688,24 @@ bool Graph::getMarginalAmbiguityCovariance(
     const Eigen::MatrixXd Hs =
         p_inv.asDiagonal() * H_nn * p_inv.asDiagonal();
     const Eigen::MatrixXd rhs_s = p_inv.asDiagonal() * H_an.transpose();
+    if (!Hs.allFinite() || !rhs_s.allFinite()) return fail("nuisance_nonfinite");
 
     Eigen::LDLT<Eigen::MatrixXd> ldlt(0.5 * (Hs + Hs.transpose()));
     if (ldlt.info() != Eigen::Success) return fail("nuisance_ldlt");
+    // Inertia guard (closes the overconfidence hole): H_nn' is the Schur complement of a PSD
+    // information matrix, hence the equilibrated Hs must be PSD in exact arithmetic. Eigen::LDLT
+    // factors indefinite matrices without setting info()!=Success, so Stage-1 roundoff could
+    // otherwise pass through and yield a spuriously positive-definite S. The signs of vectorD()
+    // are the inertia of the computed LDL^T system; a materially negative entry means PSD was
+    // lost to roundoff -> ABSTAIN (caller falls back to the shadow covariance). Monotone in
+    // safety: this only adds abstentions, never returns a less-conservative value.
+    {
+      const Eigen::VectorXd d_ldlt = ldlt.vectorD();
+      if (!d_ldlt.allFinite()) return fail("nuisance_d_nonfinite");
+      const double d_absmax = d_ldlt.cwiseAbs().maxCoeff();
+      if (d_ldlt.minCoeff() < -eps * static_cast<double>(n_dim) * d_absmax)
+        return fail("nuisance_not_psd");
+    }
     Eigen::MatrixXd Y = ldlt.solve(rhs_s);
     if (!Y.allFinite()) return fail("nuisance_solve_nonfinite");
 
@@ -652,10 +732,11 @@ bool Graph::getMarginalAmbiguityCovariance(
 
   // ---- Invert with a strict positive-definite gate: eps-relative roundoff tolerance
   // plus the propagated linear-algebra error bound (no jitter, no tuned constants). ----
+  if (!S.allFinite()) return fail("final_nonfinite");
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(S);
   if (es.info() != Eigen::Success) return fail("final_eigen");
   const double maxev = es.eigenvalues().maxCoeff();
-  if (!(maxev > 0.0) || !S.allFinite()) return fail("final_nonfinite");
+  if (!(maxev > 0.0)) return fail("final_nonfinite");
   const double tol = std::max(eps * num_amb * maxev, arith_err);
   if (es.eigenvalues().minCoeff() <= tol) return fail("final_below_arith_err");
   Q_aa = es.eigenvectors() * es.eigenvalues().cwiseInverse().asDiagonal()

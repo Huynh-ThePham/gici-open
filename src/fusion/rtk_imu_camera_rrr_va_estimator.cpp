@@ -18,6 +18,33 @@
 #include <Eigen/Eigenvalues>
 
 namespace gici {
+namespace {
+
+double eigenRoundoffTol(int dim, double scale)
+{
+  return std::numeric_limits<double>::epsilon() *
+         static_cast<double>(std::max(1, dim)) * scale;
+}
+
+bool invertStrictSpd(const Eigen::MatrixXd& matrix, Eigen::MatrixXd& inverse)
+{
+  if (matrix.rows() == 0 || matrix.rows() != matrix.cols() || !matrix.allFinite()) {
+    return false;
+  }
+  const Eigen::MatrixXd sym = 0.5 * (matrix + matrix.transpose());
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(sym);
+  if (es.info() != Eigen::Success) return false;
+  const double maxev = es.eigenvalues().maxCoeff();
+  if (!(maxev > 0.0)) return false;
+  const double tol = eigenRoundoffTol(static_cast<int>(matrix.rows()), maxev);
+  if (es.eigenvalues().minCoeff() <= tol) return false;
+  inverse = es.eigenvectors() * es.eigenvalues().cwiseInverse().asDiagonal() *
+            es.eigenvectors().transpose();
+  inverse = 0.5 * (inverse + inverse.transpose()).eval();
+  return inverse.allFinite();
+}
+
+}  // namespace
 
 RtkImuCameraRrrVaEstimator::RtkImuCameraRrrVaEstimator(
                const RtkImuCameraRrrEstimatorOptions& options,
@@ -42,10 +69,24 @@ RtkImuCameraRrrVaEstimator::RtkImuCameraRrrVaEstimator(
   // vision-aided AR path on so estimate() invokes our overridden covariance method,
   // regardless of the config flag value.
   rrr_options_.use_vision_aided_ambiguity_resolution = true;
+  if (rrr_options_.ar_use_fast_marginal_covariance) {
+    LOG(INFO) << "[vaar-fast-telemetry] version=1 enabled=1 benchmark="
+              << (rrr_options_.benchmark_joint_ambiguity_covariance ? 1 : 0);
+  }
 }
 
 RtkImuCameraRrrVaEstimator::~RtkImuCameraRrrVaEstimator()
-{}
+{
+  if (rrr_options_.ar_use_fast_marginal_covariance) {
+    // Best-effort lifetime summary. The per-abstention event records below remain the
+    // source of truth when an external SIGINT terminates file-mode runs without unwinding.
+    LOG(INFO) << "[vaar-fast-summary] version=1"
+              << " calls=" << fast_marginal_calls_
+              << " ok=" << fast_marginal_successes_
+              << " abstain=" << fast_marginal_abstentions_
+              << " nuisance_not_psd=" << fast_marginal_nuisance_not_psd_;
+  }
+}
 
 // Genuinely vision-aided ambiguity covariance. The default path asks the real joint
 // graph for the covariance of the current ambiguity blocks only. Ceres computes that
@@ -83,6 +124,27 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
     const bool ok = graph_->getMarginalAmbiguityCovariance(
         parameter_block_ids, fast_cov, rrr_options_.ablate_reprojection_in_ar, &fail_reason);
     auto t1 = chrono::steady_clock::now();
+    const double fast_ms = chrono::duration<double, std::milli>(t1 - t0).count();
+
+    ++fast_marginal_calls_;
+    if (ok) {
+      ++fast_marginal_successes_;
+    } else {
+      ++fast_marginal_abstentions_;
+      if (fail_reason == "nuisance_not_psd") {
+        ++fast_marginal_nuisance_not_psd_;
+      }
+      // Never throttle this event: one line corresponds to exactly one fail-closed
+      // fallback. The cumulative fields make omissions/duplicates detectable offline.
+      LOG(INFO) << "[vaar-fast-abstain] t=" << std::fixed << std::setprecision(3)
+                << state.timestamp
+                << " n=" << num_ambiguities
+                << " why=" << (fail_reason.empty() ? "unknown" : fail_reason)
+                << " calls=" << fast_marginal_calls_
+                << " abstain=" << fast_marginal_abstentions_
+                << " nuisance_not_psd=" << fast_marginal_nuisance_not_psd_
+                << " fast_ms=" << fast_ms;
+    }
 
     if (rrr_options_.benchmark_joint_ambiguity_covariance) {
       // Equivalence + cost experiment: compare against the whole-problem ceres::Covariance
@@ -114,8 +176,10 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
         max_diag_rel = 0.0;
         for (int i = 0; i < Qf.rows(); ++i) {
           const double cii = std::abs(Qc(i, i));
-          if (cii > 1e-30) {
+          if (cii > 0.0) {
             max_diag_rel = std::max(max_diag_rel, std::abs(Qf(i, i) - Qc(i, i)) / cii);
+          } else if (Qf(i, i) != Qc(i, i)) {
+            max_diag_rel = std::numeric_limits<double>::infinity();
           }
         }
 
@@ -123,8 +187,9 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_d(D);
         if (es_d.info() == Eigen::Success) {
           min_eig_diff = es_d.eigenvalues().minCoeff();
-          const double scale = std::max(1.0, std::max(Qf.norm(), Qc.norm()));
-          psd_diff = (min_eig_diff >= -1e-10 * scale) ? 1 : 0;
+          const double scale = std::max(Qf.norm(), Qc.norm());
+          psd_diff =
+              (min_eig_diff >= -eigenRoundoffTol(static_cast<int>(Qf.rows()), scale)) ? 1 : 0;
         }
 
         // Generalized eigenvalues of pencil (Qf, Qc): Qc^{-1/2} Qf Qc^{-1/2}.
@@ -134,16 +199,18 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
           const Eigen::VectorXd ev = es_c.eigenvalues();
           const double maxev = ev.maxCoeff();
           if (maxev > 0.0) {
-            const double floor = 1e-12 * maxev;
-            Eigen::VectorXd inv_sqrt = ev.cwiseMax(floor).cwiseSqrt().cwiseInverse();
-            const Eigen::MatrixXd Qc_inv_sqrt =
-                es_c.eigenvectors() * inv_sqrt.asDiagonal() * es_c.eigenvectors().transpose();
-            const Eigen::MatrixXd M =
-                Qc_inv_sqrt * Qf * Qc_inv_sqrt;
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_m(0.5 * (M + M.transpose()));
-            if (es_m.info() == Eigen::Success) {
-              gen_eig_min = es_m.eigenvalues().minCoeff();
-              gen_eig_max = es_m.eigenvalues().maxCoeff();
+            const double tol = eigenRoundoffTol(static_cast<int>(Qc.rows()), maxev);
+            if (ev.minCoeff() > tol) {
+              Eigen::VectorXd inv_sqrt = ev.cwiseSqrt().cwiseInverse();
+              const Eigen::MatrixXd Qc_inv_sqrt =
+                  es_c.eigenvectors() * inv_sqrt.asDiagonal() * es_c.eigenvectors().transpose();
+              const Eigen::MatrixXd M =
+                  Qc_inv_sqrt * Qf * Qc_inv_sqrt;
+              Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_m(0.5 * (M + M.transpose()));
+              if (es_m.info() == Eigen::Success) {
+                gen_eig_min = es_m.eigenvalues().minCoeff();
+                gen_eig_max = es_m.eigenvalues().maxCoeff();
+              }
             }
           }
         }
@@ -161,8 +228,7 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
         << " psd_diff=" << psd_diff
         << " gen_eig_min=" << gen_eig_min
         << " gen_eig_max=" << gen_eig_max
-        << " fast_ms=" << std::setprecision(3)
-        << chrono::duration<double, std::milli>(t1 - t0).count()
+        << " fast_ms=" << std::setprecision(3) << fast_ms
         << " ceres_ms=" << chrono::duration<double, std::milli>(t3 - t2).count()
         << " graph_pb=" << graph_->parameters().size()
         << " graph_rb=" << graph_->residuals().size();
@@ -193,14 +259,9 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
     if (es.info() != Eigen::Success) return false;
     const double maxev = es.eigenvalues().maxCoeff();
     if (!(maxev > 0.0)) return false;
-    const double roundoff_tol = 1.0e-10 * std::max(1.0, maxev);
+    const double roundoff_tol = eigenRoundoffTol(num_ambiguities, maxev);
     const double minev = es.eigenvalues().minCoeff();
-    if (minev < -roundoff_tol) return false;
-    if (minev <= 0.0) {
-      exact_covariance = es.eigenvectors()
-        * es.eigenvalues().cwiseMax(roundoff_tol).asDiagonal()
-        * es.eigenvectors().transpose();
-    }
+    if (minev <= roundoff_tol) return false;
 
     covariance = exact_covariance;
     if (rrr_options_.benchmark_joint_ambiguity_covariance) {
@@ -268,23 +329,11 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
   // caller can fall back to the plain shadow covariance -- never fabricating confidence.
   auto marginalAmbiguityInformation =
     [num_ambiguities](const Eigen::MatrixXd& H, Eigen::MatrixXd& info) -> bool {
-      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(H);
-      if (es.info() != Eigen::Success) return false;
-      const double maxev = es.eigenvalues().maxCoeff();
-      if (!(maxev > 0.0)) return false;
-      if (es.eigenvalues().minCoeff() < 1e-9 * std::max(1.0, maxev)) return false;
-      const Eigen::MatrixXd Hinv = es.eigenvectors()
-        * es.eigenvalues().cwiseInverse().asDiagonal()
-        * es.eigenvectors().transpose();
+      Eigen::MatrixXd Hinv;
+      if (!invertStrictSpd(H, Hinv)) return false;
       const Eigen::MatrixXd marg_cov =
         Hinv.topLeftCorner(num_ambiguities, num_ambiguities);
-      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> esc(marg_cov);
-      if (esc.info() != Eigen::Success ||
-          esc.eigenvalues().minCoeff() < 1e-12) return false;
-      info = esc.eigenvectors()
-        * esc.eigenvalues().cwiseInverse().asDiagonal()
-        * esc.eigenvectors().transpose();
-      return true;
+      return invertStrictSpd(marg_cov, info);
     };
 
   // Two local informations over the SAME requested blocks: WITH and WITHOUT the camera
@@ -303,21 +352,24 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
   Eigen::MatrixXd shadow_cov;
   if (!estimateAmbiguityCovariance(state, shadow_cov)) return false;
   if (shadow_cov.rows() != num_ambiguities ||
-      shadow_cov.cols() != num_ambiguities) return false;
+      shadow_cov.cols() != num_ambiguities ||
+      !shadow_cov.allFinite()) return false;
 
   // Legacy convex-mix path (ablation only; not the default). Cov = gamma*local +
   // (1-gamma)*shadow -- NOT guaranteed <= shadow, hence the Medium fixed-rate
   // regression. Kept for the paper's fusion-method comparison.
   if (!rrr_options_.ar_use_delta_information) {
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(H_with);
-    if (es.info() != Eigen::Success || es.eigenvalues().minCoeff() < 1e-9) return false;
-    const Eigen::MatrixXd local_cov = (es.eigenvectors()
-      * es.eigenvalues().cwiseInverse().asDiagonal()
-      * es.eigenvectors().transpose()).topLeftCorner(num_ambiguities, num_ambiguities);
+    Eigen::MatrixXd H_with_inv;
+    if (!invertStrictSpd(H_with, H_with_inv)) return false;
+    const Eigen::MatrixXd local_cov =
+        H_with_inv.topLeftCorner(num_ambiguities, num_ambiguities);
+    Eigen::MatrixXd unused_shadow_info;
+    if (!invertStrictSpd(shadow_cov, unused_shadow_info)) return false;
     const double gamma = rrr_options_.vision_ar_covariance_mix;
-    covariance = (gamma >= 1.0) ? local_cov
-                                : gamma * local_cov + (1.0 - gamma) * shadow_cov;
-    return true;
+    if (!(gamma >= 0.0 && gamma <= 1.0)) return false;
+    covariance = gamma * local_cov + (1.0 - gamma) * shadow_cov;
+    covariance = 0.5 * (covariance + covariance.transpose()).eval();
+    return covariance.allFinite();
   }
 
   // Delta-information fusion (default): I_final = I_shadow + (A_with - A_without).
@@ -333,26 +385,22 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
   Eigen::MatrixXd delta = A_with - A_without;
   delta = 0.5 * (delta + delta.transpose());
   {
-    // Clamp to PSD (guards tiny negative eigenvalues from finite-precision arithmetic).
+    // A_with - A_without is PSD in exact arithmetic: adding reprojection information to
+    // the nuisance block can only increase the Schur-complement ambiguity information.
+    // A material negative eigenvalue means the local approximation is numerically
+    // unresolved, so abstain instead of projecting it to a more confident PSD matrix.
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> esd(delta);
     if (esd.info() != Eigen::Success) return false;
-    delta = esd.eigenvectors()
-      * esd.eigenvalues().cwiseMax(0.0).asDiagonal()
-      * esd.eigenvectors().transpose();
+    const double scale = esd.eigenvalues().cwiseAbs().maxCoeff();
+    if (esd.eigenvalues().minCoeff() <
+        -eigenRoundoffTol(static_cast<int>(delta.rows()), scale)) return false;
   }
 
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> ess(shadow_cov);
-  if (ess.info() != Eigen::Success || ess.eigenvalues().minCoeff() < 1e-12) return false;
-  const Eigen::MatrixXd I_shadow = ess.eigenvectors()
-    * ess.eigenvalues().cwiseInverse().asDiagonal()
-    * ess.eigenvectors().transpose();
+  Eigen::MatrixXd I_shadow;
+  if (!invertStrictSpd(shadow_cov, I_shadow)) return false;
 
   const Eigen::MatrixXd I_final = I_shadow + delta;
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> esf(I_final);
-  if (esf.info() != Eigen::Success || esf.eigenvalues().minCoeff() < 1e-12) return false;
-  covariance = esf.eigenvectors()
-    * esf.eigenvalues().cwiseInverse().asDiagonal()
-    * esf.eigenvectors().transpose();
+  if (!invertStrictSpd(I_final, covariance)) return false;
 
   // Diagnostic (off by default): how many camera keyframes entered, the covariance
   // trace change, and the size of the experimental vision information increment.

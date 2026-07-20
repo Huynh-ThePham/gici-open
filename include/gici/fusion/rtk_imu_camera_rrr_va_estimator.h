@@ -18,6 +18,8 @@
 **/
 #pragma once
 
+#include <cstdint>
+
 #include "gici/fusion/rtk_imu_camera_rrr_estimator.h"
 
 namespace gici {
@@ -49,6 +51,15 @@ protected:
   // covariance is not usable -- never fabricating confidence.
   bool estimateVisionAidedAmbiguityCovariance(
     const State& state, Eigen::MatrixXd& covariance) override;
+
+private:
+  // Always-on, GT-free telemetry for the fast marginal path. Each abstention is logged
+  // synchronously with these cumulative counters, so benchmark-off runs retain an exact
+  // count of nuisance_not_psd guard activations.
+  std::uint64_t fast_marginal_calls_ = 0;
+  std::uint64_t fast_marginal_successes_ = 0;
+  std::uint64_t fast_marginal_abstentions_ = 0;
+  std::uint64_t fast_marginal_nuisance_not_psd_ = 0;
 };
 
 }  // namespace gici
