@@ -598,7 +598,12 @@ bool ImuError::EvaluateWithMinimalJacobians(double const* const * parameters,
         - speed_and_biases_ref_.tail<6>();
   }
   redo_ = redo_ || (Delta_b.head<3>().norm() * delta_t > 0.0001);
-  if (redo_)
+  // suppress_relinearization_ is set by side-effect-free covariance/information queries:
+  // skip the in-place re-preintegration (which would move this factor's linearization
+  // point and perturb the next optimize()), leaving redo_ latched so the next real
+  // Evaluate during optimize() relinearizes exactly as it otherwise would. The branch
+  // below is then the same first-order bias-corrected path used whenever redo_ is false.
+  if (redo_ && !suppress_relinearization_)
   {
     redoPreintegration(T_WS_0, speed_and_biases_0);
     redoCounter_++;

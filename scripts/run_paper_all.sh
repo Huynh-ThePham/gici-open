@@ -35,6 +35,7 @@ urbannav_run() {
   if complete "$sol" "$minl"; then mark "SKIP $arm $ds run$k (complete)"; return 0; fi
   wait_idle
   mark "RUN  $arm $ds run$k"
+  mkdir -p "$out"   # parent for $out.stdout redirect (deep/medium arm dirs)
   python3 "scripts/$runner" "$ds" --out-root "$out" > "$out.stdout" 2>&1 || true
   if complete "$sol" "$minl"; then mark "DONE $arm $ds run$k"; else mark "WARN $arm $ds run$k INCOMPLETE ($([[ -s $sol ]] && wc -l < "$sol" || echo 0) lines)"; fi
 }

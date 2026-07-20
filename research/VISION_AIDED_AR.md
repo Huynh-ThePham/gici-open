@@ -562,7 +562,7 @@ contain near-unobservable ambiguity directions whose tiny reduced eigenvalues th
 refinement gate proves are resolved (not noise); ceres' sparse QR silently rank-truncates
 them and reports confidence that is not there, while this method reports the honest large
 variance — the AR-safe direction (LAMBDA simply declines to fix such an ambiguity). The
-method is therefore *never overconfident relative to the reference* on measured data —
+method is therefore *never materially overconfident relative to the reference* on measured data —
 exactly the property whose absence caused the Deep accuracy regression.
 
 **Frozen-baseline preservation (post-change binary):** plain `rtk_imu_camera_rrr` on 1.1:
@@ -764,10 +764,12 @@ GT-tuning.
 **Verdict (what is and is not supportable).**
 - SUPPORTED, strong: the methodological core — consistent, real-time, exact-in-window
   marginal ambiguity covariance (per-epoch equivalence to `ceres::Covariance`, ~29×
-  faster, zero overconfident disagreements, usable at 99.94% of AR epochs) with the
-  frozen baseline untouched.
-- SUPPORTED, robust across 6 paired waves: deep-urban **vertical** (−38..−50%) and
-  **yaw** (−40..−60%) accuracy gains + 2.4–5× fix rate.
+  faster, no material overconfidence (171/177 disagreements conservative, the other 6
+  within 7.3e-4 trace at the 1e-3 boundary — numerical ties), usable at 99.94% of AR
+  epochs) with the frozen baseline untouched.
+- SUPPORTED, robust across 6 paired waves: deep-urban **vertical** (better 6/6; per-wave
+  16–50%, mean ~35%) and **yaw** (5/6; ~40–55% on the protocol means) accuracy gains +
+  2.4–5× fix rate.
 - NOT SUPPORTED: an across-the-board SOTA claim. Deep **horizontal** is worse in 5/6
   paired waves (median +0.6 m) with a heavy tail (+3.65 m worst), and the current
   decision layer (joint veto + P_s gate) does not remove it.
@@ -882,7 +884,7 @@ a single-run claim from RF-Cauchy run1 would have been wrong.
 | Jacobian-based local information approach (`Graph::getLocalCrossInformation`) | done (2026-07-17) — **tractable**: mean 0.21ms, 0/640 epochs > 1ms, cost independent of graph size (~3000x faster than the naive approach) |
 | Fuse local information with a prior (shadow-estimator covariance) | superseded — naive information addition double-counted current-epoch GNSS; delta-information VA path avoids that specific double count but remains overconfident because neighboring states are conditioned, not marginalized |
 | Exact full-graph Schur covariance (`ar_use_exact_joint_covariance`) | implemented + pre-fix single-run Medium/Deep evaluated (2026-07-17/18); `Graph::computeCovariance()` now has sparse-QR -> dense-SVD gauge/rank-deficiency fallback (2026-07-18), smoke-verified, but full post-fix Medium/Deep metrics are still pending |
-| **Fast consistent marginal covariance (`ar_use_fast_marginal_covariance`, default VA path)** | done (2026-07-18) — `Graph::getMarginalAmbiguityCovariance`: two-stage exact elimination (per-landmark rank-truncated Schur -> equilibrated dense LDLT with iterative-refinement self-validation), prior included via `MarginalizationError::marginalizationInformation`; validated per-epoch vs `ceres::Covariance` on full 1.1 (1787 AR epochs): 99.94% usable, 90.1% within 1e-3, **all** disagreements conservative, mean 28 ms vs 812 ms (~29x); baseline + VA 1.1 accuracy preserved |
+| **Fast consistent marginal covariance (`ar_use_fast_marginal_covariance`, default VA path)** | done (2026-07-18) — `Graph::getMarginalAmbiguityCovariance`: two-stage exact elimination (per-landmark rank-truncated Schur -> equilibrated dense LDLT with iterative-refinement self-validation), prior included via `MarginalizationError::marginalizationInformation`; validated per-epoch vs `ceres::Covariance` on full 1.1 (1787 AR epochs): 99.94% usable, 90.1% within 1e-3, no material overconfidence (171/177 disagreements conservative, 6 numerical ties ≤7.3e-4), mean 28 ms vs 812 ms (~29x); baseline + VA 1.1 accuracy preserved |
 | VA 1.1 no-regression (accuracy + fix rate) | done (2026-07-18) — 0.028991 m / 0.4727°, 869/1775 fixed vs baseline 876/1775 |
 | Implementation (wired into the real AR decision) | experimental only — baseline config remains `rtk_imu_camera_rrr`; VA config is isolated in `research/config/rtk_imu_camera_rrr_va_urbannav.yaml` and must not write to baseline result directories |
 | First end-to-end evaluation (first version) | done (2026-07-17) — superseded; the apparent gain was partly a double-count artifact (see review) |
@@ -895,5 +897,5 @@ a single-run claim from RF-Cauchy run1 would have been wrong.
 | Technical design refinement (marginalize neighbors vs condition-fixed; adaptive ratio test) | exact nuisance marginalization implemented for VA covariance; adaptive ratio test still not started; repeat-run validation required before any positive claim |
 | Deeper literature pass before submission | not started — 2026-07-17 pass was a first scoping check |
 | Decision layer "VA-v2" (joint vision/IMU veto + P_s ≥ 0.999 bootstrap gate) | done (2026-07-18) — implemented, frozen baseline preserved with gates OFF; veto fired 0 times everywhere (harm materializes after acceptance, not at it); P_s gate halved fix rate keeping u/yaw gains |
-| **Paired VA-v2 Deep n=3 (clean protocol) + final verdict** | done (2026-07-18) — vertical better 6/6 paired waves (−38..−50%), yaw 5/6 (−40..−60%), fix rate ×2.4–5; horizontal worse 5/6 (median +0.6 m, tail +3.65 m) — across-the-board SOTA claim NOT supported; Medium deltas shown to be protocol noise (0 fixes both sides); next principled step = soft/revocable fix application (new phase, pre-registered) |
+| **Paired VA-v2 Deep n=3 (clean protocol) + final verdict** | done (2026-07-18) — vertical better 6/6 paired waves (per-wave 16–50%, mean ~35%), yaw 5/6 (~40–55%), fix rate ×2.4–5; horizontal worse 5/6 (median +0.6 m, tail +3.65 m) — across-the-board SOTA claim NOT supported; Medium deltas shown to be protocol noise (0 fixes both sides); next principled step = soft/revocable fix application (new phase, pre-registered) |
 | Replay-pacing finding | post-file mode is backpressure-paced (no wall-clock pacing in `FilesReading::run()`); `max_solver_time` is wall-clock ⇒ results are load-sensitive ⇒ within-pair simultaneous execution is mandatory for fair comparison |

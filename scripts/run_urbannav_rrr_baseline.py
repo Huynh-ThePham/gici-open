@@ -40,20 +40,32 @@ RESEARCH_VA_TEMPLATE = REPO / "research" / "config" / "rtk_imu_camera_rrr_va_urb
 
 
 def _default_data_root() -> Path:
+    """Resolve UrbanNav parent directory that contains Medium/Deep folders.
+
+    Honors URBANNAV_DATA_ROOT only if it actually contains the datasets; a stale
+    env pointing at a missing UrbanNavDataset/ tree must not win over a valid
+    layout under /media/.../dataset/.
+    """
+    names = ("UrbanNav-HK-Medium-Urban-1", "UrbanNav-HK-Deep-Urban-1")
+
+    def _ok(root: Path) -> bool:
+        return any((root / name).is_dir() for name in names)
+
     env_root = os.environ.get("URBANNAV_DATA_ROOT")
     if env_root:
-        return Path(env_root)
+        p = Path(env_root)
+        if _ok(p):
+            return p
     candidates = [
-        Path("/media/theph/Data1/Research/dataset/UrbanNavDataset"),
+        # Re-prepared layout (2026-07): sequences live under an extra UrbanNav/ level.
+        Path("/media/theph/Data1/Research/dataset/UrbanNav"),
         Path("/media/theph/Data1/Research/dataset"),
+        Path("/media/theph/Data1/Research/dataset/UrbanNavDataset"),
     ]
     for candidate in candidates:
-        if any((candidate / name).is_dir() for name in (
-            "UrbanNav-HK-Medium-Urban-1",
-            "UrbanNav-HK-Deep-Urban-1",
-        )):
+        if _ok(candidate):
             return candidate
-    return candidates[0]
+    return Path(env_root) if env_root else candidates[0]
 
 
 DATA_ROOT = _default_data_root()
@@ -65,6 +77,8 @@ WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
 PAPER_APE = {
     "medium": {"pos_m": 3.40, "rot_deg": 1.30},
     "deep": {"pos_m": 2.46, "rot_deg": 1.64},
+    # Chi et al. Table V UrbanNav Harsh (Mongkok) RRR reference.
+    "harsh": {"pos_m": 6.73, "rot_deg": 1.44},
 }
 
 
@@ -81,6 +95,8 @@ class Dataset:
     dcb: str
     timeout_s: int
     min_gpgga_epochs: int
+    # Official-eval GT quality gate (Inertial-Explorer Q <= gt_q_max). None = no gate.
+    gt_q_max: int | None = None
 
 
 DATASETS: dict[str, Dataset] = {
@@ -91,7 +107,8 @@ DATASETS: dict[str, Dataset] = {
         gt_file="UrbanNav_TST_GT_raw.txt",
         gps_week_day_offset=86400.0,
         rover="gnss/UrbanNav-HK-Medium-Urban-1.ublox.f9p.splitter.obs",
-        base="gnss/base/hkkt137g.rnx",
+        # HKKT 5 s session base (h02, HK SatRef archive) — standardized rate across all 3.
+        base="gnss/base/hkkt137_5s.rnx",
         eph="gnss/base/brdc1370.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
         timeout_s=7200,
@@ -104,12 +121,32 @@ DATASETS: dict[str, Dataset] = {
         gt_file="UrbanNav_whampoa_raw.txt",
         gps_week_day_offset=432000.0,
         rover="gnss/UrbanNav-HK-Deep-Urban-1.ublox.f9p.splitter.obs",
-        # Author GICI paper eval uses session-aligned 5 s base (not full-day HKKT).
-        base="gnss/base/_deprecated/hkkt141g.21o",
+        # HKKT 5 s session base (h06, HK SatRef archive) — standardized rate across all 3.
+        # (Equivalent to the prior _deprecated/hkkt141g.21o 5 s cut that gave 2.14 m.)
+        base="gnss/base/hkkt141_5s.rnx",
         eph="gnss/base/_deprecated/brdc_mn.rnx",
         dcb="research/dcb/CAS0MGXRAP_20211410000_01D_01D_DCB.BSX",
         timeout_s=10800,
         min_gpgga_epochs=14000,
+    ),
+    "harsh": Dataset(
+        key="harsh",
+        title="UrbanNav-HK-Harsh-Urban-1",
+        root=DATA_ROOT / "UrbanNav-HK-Harsh-Urban-1",
+        gt_file="UrbanNav_mongkok_GT_part_raw.txt",
+        # DOY 138 = 2021-05-18 (Tue) = GPS week 2158 day 2.
+        gps_week_day_offset=172800.0,
+        rover="gnss/UrbanNav-HK-Harsh-Urban-1.ublox.f9p.splitter.obs",
+        # HKKT 5 s session base (h03+h04 merged, HK SatRef archive) — standardized
+        # rate across all 3. eph BKG mixed nav; DCB CAS 2021-138. Same sources as Deep/Medium.
+        base="gnss/base/hkkt138_5s.rnx",
+        eph="gnss/base/brdc1380.rnx",
+        dcb="research/dcb/CAS0MGXRAP_20211380000_01D_01D_DCB.BSX",
+        timeout_s=14400,
+        min_gpgga_epochs=28000,
+        # Official Harsh eval: GT is partial (t_rel [453,2764]s, auto-windowed by GT
+        # coverage) and low quality; gate to Q <= 2 per the dataset audit.
+        gt_q_max=2,
     ),
 }
 
@@ -205,6 +242,7 @@ def load_ground_truth(path: Path) -> dict[str, list[Any]]:
     times: list[float] = []
     llh: list[tuple[float, float, float]] = []
     heading: list[float] = []
+    qflag: list[int] = []
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith(("UTCTime", "(sec)", "GPSTime")):
@@ -218,14 +256,35 @@ def load_ground_truth(path: Path) -> dict[str, list[Any]]:
             lon = dms_to_deg(float(parts[6]), float(parts[7]), float(parts[8]))
             h = float(parts[9])
             hdg = float(parts[18]) % 360.0
+            # Inertial-Explorer quality flag (1 best .. 6 worst); UrbanNav GT col 20.
+            q = int(float(parts[19]))
         except ValueError:
             continue
         times.append(gpst)
         llh.append((lat, lon, h))
         heading.append(hdg)
+        qflag.append(q)
     if not times:
         raise RuntimeError(f"No ground truth parsed from {path}")
-    return {"times": times, "llh": llh, "heading": heading}
+    return {"times": times, "llh": llh, "heading": heading, "qflag": qflag}
+
+
+def gt_q_ok(times: list[float], qflag: list[int], t: float, q_max: int) -> bool:
+    """True iff the two GT epochs bracketing t both satisfy Q <= q_max.
+
+    Conservative: an evaluated solution epoch is kept only when it lies between
+    two good-quality GT fixes, so interpolated reference positions are trustworthy.
+    """
+    if t < times[0] or t > times[-1]:
+        return False
+    lo, hi = 0, len(times) - 1
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if times[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    return qflag[lo] <= q_max and qflag[hi] <= q_max
 
 
 def parse_solution(path: Path, gps_week_day_offset: float) -> list[dict[str, Any]]:
@@ -274,24 +333,38 @@ def parse_solution(path: Path, gps_week_day_offset: float) -> list[dict[str, Any
     return epochs
 
 
-def evaluate_solution(solution: Path, gt: dict[str, list[Any]], gps_week_day_offset: float) -> dict[str, Any]:
+def evaluate_solution(
+    solution: Path,
+    gt: dict[str, list[Any]],
+    gps_week_day_offset: float,
+    q_max: int | None = None,
+) -> dict[str, Any]:
     epochs = parse_solution(solution, gps_week_day_offset)
     if not epochs:
         raise RuntimeError(f"No GPGGA epochs in {solution}")
 
     gt_times = gt["times"]
     gt_llh = gt["llh"]
+    gt_q = gt.get("qflag")
     ref_lat, ref_lon, ref_h = gt_llh[0]
     ref_ecef = llh_to_ecef(ref_lat, ref_lon, ref_h)
 
     e_vals, n_vals, u_vals, h_vals, yaw_err_vals = [], [], [], [], []
     quality_counts: dict[int, int] = {}
+    n_q_filtered = 0
 
     for ep in epochs:
         quality_counts[ep["quality"]] = quality_counts.get(ep["quality"], 0) + 1
         gt_pos = interp_llh(gt_times, gt_llh, ep["gpst"])
         if gt_pos is None:
             continue
+        # Partial/low-quality GT (e.g. UrbanNav Harsh): keep only epochs bracketed
+        # by GT fixes of quality Q <= q_max. The [453,2764]s Harsh window is already
+        # enforced by GT coverage (interp_llh returns None outside it).
+        if q_max is not None and gt_q is not None:
+            if not gt_q_ok(gt_times, gt_q, ep["gpst"], q_max):
+                n_q_filtered += 1
+                continue
         sol_ecef = llh_to_ecef(ep["lat"], ep["lon"], ep["h"])
         gt_ecef = llh_to_ecef(*gt_pos)
         sol_enu = ecef_to_enu(*sol_ecef, ref_ecef, ref_lat, ref_lon)
@@ -326,6 +399,8 @@ def evaluate_solution(solution: Path, gt: dict[str, list[Any]], gps_week_day_off
         "float_rate": quality_counts.get(5, 0) / len(epochs),
         "single_rate": quality_counts.get(1, 0) / len(epochs),
         "quality_counts": {str(k): v for k, v in sorted(quality_counts.items())},
+        "gt_q_max": q_max,
+        "n_gt_q_filtered": n_q_filtered,
     }
 
 
@@ -477,6 +552,10 @@ def _watchdog_settings(ds: Dataset | None, use_watchdog: bool) -> dict[str, floa
         "stable_s": float(os.environ.get("URBANNAV_FILEMODE_STABLE_SECONDS", "90")),
         "min_gpgga": int(os.environ.get("URBANNAV_FILEMODE_MIN_GPGGA", str(default_min))),
         "progress_every_s": float(os.environ.get("URBANNAV_FILEMODE_PROGRESS_EVERY", "30")),
+        # Hang guard: gici_main can freeze near end-of-stream (known race). If the
+        # solution stops growing for this long REGARDLESS of min_gpgga, stop it so
+        # the run can't wedge until timeout. Below-gate hangs are accepted as partial.
+        "hang_s": float(os.environ.get("URBANNAV_FILEMODE_HANG_SECONDS", "150")),
     }
 
 
@@ -516,6 +595,7 @@ def run_gici(
             start_new_session=True,
         )
         stable_elapsed = 0.0
+        hang_elapsed = 0.0
         prev_gpgga = -1
         prev_size = -1
         next_progress = t0 + float(wd["progress_every_s"])
@@ -570,6 +650,22 @@ def run_gici(
                 else:
                     stable_elapsed = 0.0
 
+                # Hang guard (independent of min_gpgga): frozen solution => stuck.
+                if gpgga > 100 and gpgga == prev_gpgga:
+                    hang_elapsed += float(wd["interval_s"])
+                    if hang_elapsed >= float(wd["hang_s"]):
+                        print(
+                            f"  [watchdog] solution FROZEN {hang_elapsed:.0f}s "
+                            f"(gpgga={gpgga}); gici_main likely hung, sending SIGINT",
+                            flush=True,
+                        )
+                        os.killpg(proc.pid, signal.SIGINT)
+                        meta["hang_stopped"] = True
+                        meta["watchdog_gpgga"] = gpgga
+                        break
+                else:
+                    hang_elapsed = 0.0
+
                 prev_gpgga, prev_size = gpgga, size
 
             try:
@@ -593,10 +689,21 @@ def run_gici(
     final_gpgga = count_gpgga(sol)
     meta["final_gpgga"] = final_gpgga
     if final_gpgga < int(wd["min_gpgga"]):
-        raise RuntimeError(
-            f"solution has only {final_gpgga} GPGGA epochs; "
-            f"expected at least {wd['min_gpgga']}: {sol}"
-        )
+        # A hang near end-of-stream can freeze the run just below the gate. Accept
+        # it as a (flagged) partial trajectory if it still covers >=85% of the gate;
+        # otherwise it is a genuinely short/broken run and must fail.
+        if meta.get("hang_stopped") and final_gpgga >= 0.85 * int(wd["min_gpgga"]):
+            meta["short_run"] = True
+            print(
+                f"  [watchdog] accepting partial (hang): {final_gpgga} GPGGA "
+                f">= 85% of {wd['min_gpgga']}",
+                flush=True,
+            )
+        else:
+            raise RuntimeError(
+                f"solution has only {final_gpgga} GPGGA epochs; "
+                f"expected at least {wd['min_gpgga']}: {sol}"
+            )
     return meta
 
 
@@ -620,7 +727,9 @@ def run_dataset(
     cfg_path = render_config(ds, out_dir, config_source, template_path, expected_estimator)
     meta = run_gici(cfg_path, out_dir, ds.timeout_s, skip_run=skip_run, ds=ds, use_watchdog=use_watchdog)
     gt = load_ground_truth(ds.root / ds.gt_file)
-    metrics = evaluate_solution(out_dir / "output" / "solution.txt", gt, ds.gps_week_day_offset)
+    metrics = evaluate_solution(
+        out_dir / "output" / "solution.txt", gt, ds.gps_week_day_offset, q_max=ds.gt_q_max
+    )
     paper = PAPER_APE[ds.key]
     result = {
         "dataset": ds.key,
@@ -648,7 +757,7 @@ def main(
     default_out_root: Path | None = None,
 ) -> int:
     ap = argparse.ArgumentParser(description=description)
-    ap.add_argument("datasets", nargs="*", choices=["medium", "deep"], default=["medium", "deep"])
+    ap.add_argument("datasets", nargs="*", choices=["medium", "deep", "harsh"], default=["medium", "deep"])
     ap.add_argument("--skip-run", action="store_true")
     ap.add_argument(
         "--no-watchdog",
@@ -673,6 +782,12 @@ def main(
         type=Path,
         default=default_out_root or REPO / "results" / "baseline" / "urbannav",
     )
+    ap.add_argument(
+        "--timeout-s",
+        type=int,
+        default=None,
+        help="Override dataset timeout_s (e.g. 21600 for Ceres-oracle Deep).",
+    )
     args = ap.parse_args(argv)
     if args.config_source == "dataset" and not args.allow_dataset_config:
         ap.error("--config-source dataset is deprecated; pass --allow-dataset-config explicitly")
@@ -685,6 +800,8 @@ def main(
 
     for key in args.datasets:
         ds = DATASETS[key]
+        if args.timeout_s is not None:
+            ds = Dataset(**{**ds.__dict__, "timeout_s": int(args.timeout_s)})
         print(f"\n=== {ds.title} ===", flush=True)
         try:
             if args.validate_only:

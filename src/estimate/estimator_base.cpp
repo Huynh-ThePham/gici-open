@@ -90,9 +90,20 @@ bool EstimatorBase::applyMarginalization()
                                          marginalization_keep_parameter_blocks_);
 
   // update error computation
-  if(parameter_blocks_to_be_marginalized.size() > 0) {
+  // BUGFIX (original GICI): residual blocks can be added to the prior (each addResidualBlock
+  // sets error_computation_valid_ = false) even on epochs that marginalize ZERO parameter
+  // blocks -- e.g. an overlap-state early-return adds IMU/GNSS residuals but pushes no state
+  // to marginalize, common in harsh urban canyons (cycle-slips, satellite/landmark loss).
+  // The old guard `parameter_blocks_to_be_marginalized.size() > 0` then skipped
+  // updateErrorComputation(), so the prior was re-added and solved with an invalid cached
+  // decomposition -> FATAL CHECK at marginalization_error.cpp:1043 (intermittent, Harsh-only).
+  // Recompute whenever the prior is non-empty; updateErrorComputation() self-guards (no-op
+  // when already valid), so this is behavior-preserving for every previously-working epoch
+  // and only refreshes the derived J_/e0_/S_ from the same H_/b0_ (no estimator state,
+  // weight, or linearization point changes). Skip the empty prior (no linear system to form).
+  if (marginalization_error_ && marginalization_error_->parameterBlocks() > 0) {
     marginalization_error_->updateErrorComputation();
-  }                              
+  }
 
   // add the marginalization term again
   if(marginalization_error_->num_residuals()==0)

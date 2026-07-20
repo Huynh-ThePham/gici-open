@@ -14,8 +14,9 @@ Working title (PARTIAL/limit variant):
    equilibrated dense LDLT with iterative-refinement self-validation), including
    the marginalization prior via a read-only information accessor. Validated
    per-epoch against ceres::Covariance on 1787 AR epochs: 99.94% usable, 90.1%
-   within 1e-3 rel. err., ALL 177 disagreements conservative (never
-   overconfident), mean 28 ms vs 812 ms (~29x), max 97 ms vs 2.7 s.
+   within 1e-3 rel. err., no material overconfidence (171/177 disagreements
+   conservative, the other 6 numerical ties <=7.3e-4 trace at the 1e-3 boundary),
+   mean 28 ms vs 812 ms (~29x), max 97 ms vs 2.7 s.
    [EVIDENCE: research/VISION_AIDED_AR.md "Consistent + real-time marginal
    covariance"; logs gici_board_va/1_1]
 
@@ -60,8 +61,8 @@ Working title (PARTIAL/limit variant):
 5. **Equivalence & cost study (GICI-board 1.1)** — table: usability, rel.err
    distribution, conservativeness, timing vs ceres; frozen-baseline preservation.
 6. **Vision-aided AR with consistent covariance (VA-v1/v2) on UrbanNav** —
-   paired protocol; results table (BL/VA-v1/VA-v2, n=3): vertical -38..50% 6/6,
-   yaw 5/6, fix rate x2.4-5, horizontal worse 5/6 => the puzzle.
+   paired protocol; results table (BL/VA-v1/VA-v2, n=3): vertical better 6/6
+   (per-wave 16-50%, mean ~35%), yaw 5/6, fix rate x2.4-5, horizontal worse 5/6 => the puzzle.
 7. **Diagnosis** — fixed-epoch vs float-epoch conditioning; segment analysis;
    the prior channel; why acceptance-time validation cannot work.
 8. **The falsification chain** — VA-v2 gates, VA-v3 expiry (incl. the two
@@ -72,7 +73,7 @@ Working title (PARTIAL/limit variant):
    V; baseline Sim(3) brackets [chi23]'s 2.46). Verdict: limit-study /
    method+partial-win+boundary.
 10. **Discussion** — what the chain establishes; integrity/consistency as a
-    deployment property (never-overconfident covariance); limits: Gaussian
+    deployment property (conservative-or-tied covariance); limits: Gaussian
     confidence saturates while NLOS bias is invisible => future work: vision
     NLOS exclusion, robust float error models, 3DMA. Honest caveats: Medium is
     0-fix (parity by construction); replay protocol noise; n=3.

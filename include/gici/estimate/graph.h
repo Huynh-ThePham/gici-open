@@ -204,6 +204,12 @@ public:
    * @param[in]  ambiguity_ids The ambiguity parameter blocks, in the row/col order the
    *             output should follow (matches the ids passed to AmbiguityResolution).
    * @param[out] Q_aa The marginal ambiguity covariance (symmetric positive-definite).
+   * @param[in]  exclude_reprojection If true, camera reprojection residuals are dropped from
+   *             the assembled information (Pass 1 discovery and Pass 2 assembly), so the
+   *             marginal reduces to the GNSS+IMU+prior graph with vision removed. This is the
+   *             ablation control that isolates the pure vision contribution to the ambiguity
+   *             covariance (vision-off vs vision-on on the identical marginal machinery);
+   *             default false = full VA covariance.
    * @param[out] fail_reason Optional: on a false return, a short tag naming the abstention
    *             point (diagnostics/logging only; does not affect behavior).
    * @return True on success; false (caller must fall back -- never a fabricated matrix) if
@@ -213,7 +219,7 @@ public:
    */
   bool getMarginalAmbiguityCovariance(
       const std::vector<uint64_t>& ambiguity_ids, Eigen::MatrixXd& Q_aa,
-      std::string* fail_reason = nullptr);
+      bool exclude_reprojection = false, std::string* fail_reason = nullptr);
 
   /// @name add/remove
   /// @{

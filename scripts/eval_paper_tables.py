@@ -93,14 +93,26 @@ def eval_one(out_dir: Path, ds: str) -> dict | None:
 
 
 def parse_va_log(path: Path) -> dict:
+    """Parse [vaar-fast] lines.
+
+    rel_err is Frobenius ||Qf-Qc||_F/||Qc||_F (not trace). Trace fields are a
+    secondary conservative/tie proxy. Newer logs may also include max_diag_rel,
+    min_eig_diff, psd_diff, gen_eig_min/max.
+    """
     if not path or not path.exists():
         return {"error": f"log not found: {path}"}
     fast_ok = tot = le3 = conserv = overconf = 0
     worst_overconf_deficit = 0.0  # max (tr_ceres-tr_fast)/tr_ceres over overconfident-by-trace
     fast_ms, ceres_ms = [], []
+    max_diag_rels, min_eig_diffs, gen_maxs = [], [], []
+    psd_ok = psd_tot = 0
     rx = re.compile(r"\[vaar-fast\].*?fast_ok=(\d).*?rel_err=([0-9.eE+-]+).*?"
-                    r"tr_fast=([0-9.eE+-]+) tr_ceres=([0-9.eE+-]+) "
+                    r"tr_fast=([0-9.eE+-]+) tr_ceres=([0-9.eE+-]+).*?"
                     r"fast_ms=([0-9.eE+-]+) ceres_ms=([0-9.eE+-]+)")
+    rx_extra = re.compile(
+        r"max_diag_rel=([0-9.eE+-nanNAN]+).*?min_eig_diff=([0-9.eE+-nanNAN]+).*?"
+        r"psd_diff=(-?\d).*?gen_eig_min=([0-9.eE+-nanNAN]+).*?gen_eig_max=([0-9.eE+-nanNAN]+)"
+    )
     for line in path.read_text(errors="ignore").splitlines():
         mm = rx.search(line)
         if not mm:
@@ -120,14 +132,40 @@ def parse_va_log(path: Path) -> dict:
                                              (trc_f - trf_f) / trc_f if trc_f else 0.0)
         fast_ms.append(float(fms))
         ceres_ms.append(float(cms))
+        ex = rx_extra.search(line)
+        if ex:
+            def _f(s: str) -> float | None:
+                try:
+                    v = float(s)
+                    return None if v != v else v  # NaN
+                except ValueError:
+                    return None
+            mdr, med, psd, gmin, gmax = ex.groups()
+            if (v := _f(mdr)) is not None:
+                max_diag_rels.append(v)
+            if (v := _f(med)) is not None:
+                min_eig_diffs.append(v)
+            if (v := _f(gmax)) is not None:
+                gen_maxs.append(v)
+            if psd != "-1":
+                psd_tot += 1
+                if psd == "1":
+                    psd_ok += 1
     if tot == 0:
         return {"error": "no [vaar-fast] lines"}
-    return {"epochs": tot, "usable_pct": 100.0 * fast_ok / tot,
-            "within_1e-3_pct": 100.0 * le3 / max(fast_ok, 1),
-            "disagreements": fast_ok - le3, "conservative": conserv, "overconfident": overconf,
-            "worst_overconf_trace_deficit": worst_overconf_deficit,
-            "fast_ms_mean": statistics.mean(fast_ms), "fast_ms_max": max(fast_ms),
-            "ceres_ms_mean": statistics.mean(ceres_ms), "ceres_ms_max": max(ceres_ms)}
+    out = {"epochs": tot, "usable_pct": 100.0 * fast_ok / tot,
+           "within_1e-3_pct": 100.0 * le3 / max(fast_ok, 1),
+           "disagreements": fast_ok - le3, "conservative": conserv, "overconfident": overconf,
+           "worst_overconf_trace_deficit": worst_overconf_deficit,
+           "rel_err_is_frobenius": True,
+           "fast_ms_mean": statistics.mean(fast_ms), "fast_ms_max": max(fast_ms),
+           "ceres_ms_mean": statistics.mean(ceres_ms), "ceres_ms_max": max(ceres_ms)}
+    if max_diag_rels:
+        out["max_diag_rel_p95"] = statistics.quantiles(max_diag_rels, n=20)[18] if len(max_diag_rels) >= 20 else max(max_diag_rels)
+        out["psd_diff_rate"] = psd_ok / max(psd_tot, 1)
+        out["gen_eig_max_p95"] = statistics.quantiles(gen_maxs, n=20)[18] if len(gen_maxs) >= 20 else max(gen_maxs)
+        out["min_eig_diff_min"] = min(min_eig_diffs) if min_eig_diffs else None
+    return out
 
 
 def fmt_runs(ms: list[dict], key: str) -> str:

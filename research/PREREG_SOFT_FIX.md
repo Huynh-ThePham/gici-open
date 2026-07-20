@@ -8,7 +8,8 @@ must be reported as exploratory, never merged into the confirmatory tables.
 ## Established facts this builds on (research/VISION_AIDED_AR.md, 2026-07-18)
 
 1. Consistent real-time marginal AR covariance is validated (equivalence to
-   `ceres::Covariance`, ~29x, zero overconfident disagreements).
+   `ceres::Covariance`, ~29x, no material overconfidence — 171/177 conservative,
+   6 numerical ties ≤7.3e-4).
 2. Final paired UrbanNav verdict: vertical better 6/6 paired waves, yaw 5/6,
    fix rate x2.4-5 — but horizontal worse 5/6 (median +0.6 m, worst +3.65 m).
 3. Diagnosis: accepted fixes are locally GOOD (median dh at fixed epochs <= 0 vs

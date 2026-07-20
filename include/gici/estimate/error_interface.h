@@ -128,6 +128,15 @@ public:
       double const* const * parameters, double* residuals, double** jacobians,
       double** jacobians_minimal) const = 0;
 
+  /// @brief Suppress in-place relinearization during a side-effect-free covariance /
+  ///        information query. Some factors (e.g. ImuError) relinearize their stored
+  ///        preintegration in place when Evaluate is called off the last linearization
+  ///        point; doing so inside a covariance assembly would move the graph's
+  ///        linearization and perturb the next optimize(). Such factors override this to
+  ///        gate that relinearization; the query sets it true around its evaluations and
+  ///        restores false afterwards. No-op by default.
+  virtual void setSuppressRelinearization(bool /*suppress*/) const {}
+
   /// @brief Residual block type as string
   virtual ErrorType typeInfo() const = 0;
 

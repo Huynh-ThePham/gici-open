@@ -256,10 +256,13 @@ bool Graph::getLocalCrossInformation(
       jacobians_minimal_raw[j] = jacobians_minimal_eigen[j].data();
     }
 
+    // Side-effect-free observer: suppress in-place IMU relinearization (no-op otherwise).
+    res.error_interface_ptr->setSuppressRelinearization(true);
     res.error_interface_ptr->EvaluateWithMinimalJacobians(parameters_raw,
                                                            residuals_raw,
                                                            jacobians_raw,
                                                            jacobians_minimal_raw);
+    res.error_interface_ptr->setSuppressRelinearization(false);
 
     for (size_t a = 0; a < pars.size(); ++a) {
       if (local_index[a] < 0) continue;
@@ -303,7 +306,7 @@ bool Graph::getLocalCrossInformation(
 // numerically resolve the marginal -- it never fabricates confidence.
 bool Graph::getMarginalAmbiguityCovariance(
     const std::vector<uint64_t>& ambiguity_ids, Eigen::MatrixXd& Q_aa,
-    std::string* fail_reason)
+    bool exclude_reprojection, std::string* fail_reason)
 {
   auto fail = [&](const char* reason) -> bool {
     if (fail_reason) *fail_reason = reason;
@@ -381,6 +384,10 @@ bool Graph::getMarginalAmbiguityCovariance(
   // ---- Pass 1: discover all active blocks touched by any residual, fixing n_dim and the
   // landmark count before sizing containers. ----
   for (const auto& res : all_residuals) {
+    // Ablation: with reprojection excluded, landmarks (observed only by reprojection) are
+    // never discovered, so the marginal reduces to the GNSS+IMU+prior graph (vision off).
+    if (exclude_reprojection &&
+        res.error_interface_ptr->typeInfo() == ErrorType::kReprojectionError) continue;
     const ParameterBlockCollection pars = parameters(res.residual_block_id);
     for (const auto& p : pars) slot_of(p.second);
   }
@@ -442,6 +449,10 @@ bool Graph::getMarginalAmbiguityCovariance(
   for (const auto& res : all_residuals) {
     const ErrorType type = res.error_interface_ptr->typeInfo();
 
+    // Ablation control (must mirror the Pass 1 skip exactly, or discovered N/L slots would
+    // go unfilled): drop camera reprojection residuals so the marginal excludes vision.
+    if (exclude_reprojection && type == ErrorType::kReprojectionError) continue;
+
     // Marginalization prior: scatter its information Lambda = J_^T J_ (pre-fetched in
     // pass 0) directly -- never route the dynamically-sized prior through the generic
     // evaluation buffers.
@@ -487,9 +498,14 @@ bool Graph::getMarginalAmbiguityCovariance(
       jac_min[j].resize(rdim, pars[j].second->minimalDimension());
       jacobians_minimal_raw[j] = jac_min[j].data();
     }
+    // Side-effect-free observer: do not let an IMU factor relinearize in place while we
+    // assemble the marginal covariance (that would move the graph linearization and
+    // perturb the next optimize()). No-op for non-IMU factors.
+    res.error_interface_ptr->setSuppressRelinearization(true);
     res.error_interface_ptr->EvaluateWithMinimalJacobians(
         parameters_raw.data(), residuals_eigen.data(),
         jacobians_raw.data(), jacobians_minimal_raw.data());
+    res.error_interface_ptr->setSuppressRelinearization(false);
 
     if (res.loss_function_ptr) {
       // Triggs/BANS correction (Eq. 11), identical to MarginalizationError and ceres'
@@ -1375,6 +1391,20 @@ bool Graph::computeCovariance(
       }
       return extract_covariance(method, covariance_handle, output);
     };
+
+  // Side-effect-free observer: ceres::Covariance::Compute evaluates every residual
+  // internally, which would relinearize IMU factors in place. Suppress that for the whole
+  // computation and restore on every exit path (RAII), so this reference covariance never
+  // moves the graph's linearization point.
+  struct RelinGuard {
+    ResidualBlockCollection res;
+    explicit RelinGuard(ResidualBlockCollection r) : res(std::move(r)) {
+      for (const auto& x : res) x.error_interface_ptr->setSuppressRelinearization(true);
+    }
+    ~RelinGuard() {
+      for (const auto& x : res) x.error_interface_ptr->setSuppressRelinearization(false);
+    }
+  } relin_guard(residuals());
 
   if (use_dense_svd) {
     if (!compute_with_options(true, covariance)) {

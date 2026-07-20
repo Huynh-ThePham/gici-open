@@ -172,6 +172,15 @@ public:
     redo_ = redo;
   }
 
+  /// \brief Gate in-place preintegration relinearization. When true,
+  /// EvaluateWithMinimalJacobians skips redoPreintegration() (leaving redo_ latched), so a
+  /// covariance/information query evaluates at the graph's current linearization without
+  /// moving it. See ErrorInterface::setSuppressRelinearization.
+  void setSuppressRelinearization(bool suppress) const override
+  {
+    suppress_relinearization_ = suppress;
+  }
+
   /// \brief (Re)set the parameters.
   /// \@param[in] imuParameters The parameters to be used.
   void setImuParameters(const ImuParameters& imuParameters)
@@ -324,6 +333,10 @@ protected:
   mutable bool redo_ = true;
   ///< Keeps track of whether or not this redoPreintegration() needs to be done.
   mutable int redoCounter_ = 0;
+
+  ///< When true, EvaluateWithMinimalJacobians skips the in-place redoPreintegration
+  ///< relinearization so covariance/information queries stay side-effect-free.
+  mutable bool suppress_relinearization_ = false;
   ///< Counts the number of preintegrations for statistics.
 
   // information matrix and its square root

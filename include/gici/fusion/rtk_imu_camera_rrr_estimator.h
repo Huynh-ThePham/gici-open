@@ -59,11 +59,13 @@ struct RtkImuCameraRrrEstimatorOptions {
 
   // Vision-ablation control (research/vision-aided-ambiguity-resolution): only used by
   // the RtkImuCameraRrrVaEstimator. When true, the camera-keyframe (cPose) chain is
-  // still added to the local cross-information, but its reprojection residuals are
-  // withheld -- so the camera pose is present but carries no visual constraint. This
-  // isolates whether the va estimator's accuracy gain comes from genuine visual
-  // information (gain disappears when reprojection is withheld) or merely from adding
-  // more marginalized blocks (gain persists). Diagnostic only; default off.
+  // still added, but its reprojection residuals are withheld -- so the camera pose is
+  // present but carries no visual constraint. Applies to BOTH covariance paths: it drops
+  // reprojection from the fast marginal (getMarginalAmbiguityCovariance, the default AR
+  // path) and from the delta-information "with" call. This isolates whether the va gain
+  // comes from genuine visual information (gain disappears when reprojection is withheld)
+  // or merely from the full-graph marginal vs the coarse GNSS-only shadow (gain persists).
+  // Diagnostic only; default off.
   bool ablate_reprojection_in_ar = false;
 
   // Legacy vision-aided AR covariance mix. Diagnostic only: Cov = gamma * local +

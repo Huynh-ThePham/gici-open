@@ -44,8 +44,8 @@ backpressure-paced + wall-clock solver budget ⇒ load-sensitive). Resumable: a 
 ### Stage B — Table 1 (covariance equivalence + cost), GICI-board 1.1
 - `run_va_1_1.sh` with the VA benchmark config → parse `[vaar-fast]` / `[vaar-benchmark]`
   lines from `run.stderr`: usable %, rel-err distribution, conservative-disagreement
-  count, fast_ms vs ceres_ms. (Expected: 99.94% usable, 90.1% ≤1e-3, 0 overconfident,
-  28 ms vs 812 ms.)
+  count, fast_ms vs ceres_ms. (Expected: 99.94% usable, 90.1% ≤1e-3, no material
+  overconfidence — 171/177 conservative, 6 numerical ties ≤7.3e-4 — 28 ms vs 812 ms.)
 
 ### Stage C — UrbanNav Deep, solo (main results, Tables 3/6/7)
 | Arm | Runner | n |

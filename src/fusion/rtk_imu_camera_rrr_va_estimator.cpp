@@ -12,6 +12,10 @@
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
+#include <limits>
+#include <cmath>
+
+#include <Eigen/Eigenvalues>
 
 namespace gici {
 
@@ -77,7 +81,7 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
     Eigen::MatrixXd fast_cov;
     std::string fail_reason;
     const bool ok = graph_->getMarginalAmbiguityCovariance(
-        parameter_block_ids, fast_cov, &fail_reason);
+        parameter_block_ids, fast_cov, rrr_options_.ablate_reprojection_in_ar, &fail_reason);
     auto t1 = chrono::steady_clock::now();
 
     if (rrr_options_.benchmark_joint_ambiguity_covariance) {
@@ -88,14 +92,61 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
       Eigen::MatrixXd ceres_cov;
       const bool ceres_ok = graph_->computeCovariance(parameter_block_ids, ceres_cov);
       auto t3 = chrono::steady_clock::now();
+      // rel_err = ||Q_fast - Q_ceres||_F / ||Q_ceres||_F (Frobenius, not trace).
+      // Additional Loewner / directional diagnostics for paper-grade validation.
       double rel_err = -1.0;
       double tr_fast = -1.0, tr_ceres = -1.0;
+      double max_diag_rel = -1.0;
+      double min_eig_diff = std::numeric_limits<double>::quiet_NaN();
+      double gen_eig_min = std::numeric_limits<double>::quiet_NaN();
+      double gen_eig_max = std::numeric_limits<double>::quiet_NaN();
+      int psd_diff = -1;  // 1 => Q_fast - Q_ceres PSD (proposed Loewner-larger)
       if (ok && ceres_ok && ceres_cov.rows() == fast_cov.rows() &&
-          ceres_cov.allFinite() && fast_cov.allFinite()) {
-        const double denom = ceres_cov.norm();
-        rel_err = denom > 0.0 ? (fast_cov - ceres_cov).norm() / denom : -1.0;
-        tr_fast = fast_cov.trace();
-        tr_ceres = ceres_cov.trace();
+          ceres_cov.allFinite() && fast_cov.allFinite() &&
+          fast_cov.rows() == fast_cov.cols() && fast_cov.rows() > 0) {
+        const Eigen::MatrixXd Qf = 0.5 * (fast_cov + fast_cov.transpose());
+        const Eigen::MatrixXd Qc = 0.5 * (ceres_cov + ceres_cov.transpose());
+        const double denom = Qc.norm();
+        rel_err = denom > 0.0 ? (Qf - Qc).norm() / denom : -1.0;
+        tr_fast = Qf.trace();
+        tr_ceres = Qc.trace();
+
+        max_diag_rel = 0.0;
+        for (int i = 0; i < Qf.rows(); ++i) {
+          const double cii = std::abs(Qc(i, i));
+          if (cii > 1e-30) {
+            max_diag_rel = std::max(max_diag_rel, std::abs(Qf(i, i) - Qc(i, i)) / cii);
+          }
+        }
+
+        const Eigen::MatrixXd D = Qf - Qc;
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_d(D);
+        if (es_d.info() == Eigen::Success) {
+          min_eig_diff = es_d.eigenvalues().minCoeff();
+          const double scale = std::max(1.0, std::max(Qf.norm(), Qc.norm()));
+          psd_diff = (min_eig_diff >= -1e-10 * scale) ? 1 : 0;
+        }
+
+        // Generalized eigenvalues of pencil (Qf, Qc): Qc^{-1/2} Qf Qc^{-1/2}.
+        // λ > 1 => proposed has larger variance in that direction.
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_c(Qc);
+        if (es_c.info() == Eigen::Success) {
+          const Eigen::VectorXd ev = es_c.eigenvalues();
+          const double maxev = ev.maxCoeff();
+          if (maxev > 0.0) {
+            const double floor = 1e-12 * maxev;
+            Eigen::VectorXd inv_sqrt = ev.cwiseMax(floor).cwiseSqrt().cwiseInverse();
+            const Eigen::MatrixXd Qc_inv_sqrt =
+                es_c.eigenvectors() * inv_sqrt.asDiagonal() * es_c.eigenvectors().transpose();
+            const Eigen::MatrixXd M =
+                Qc_inv_sqrt * Qf * Qc_inv_sqrt;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_m(0.5 * (M + M.transpose()));
+            if (es_m.info() == Eigen::Success) {
+              gen_eig_min = es_m.eigenvalues().minCoeff();
+              gen_eig_max = es_m.eigenvalues().maxCoeff();
+            }
+          }
+        }
       }
       LOG(INFO) << "[vaar-fast] t=" << std::fixed << std::setprecision(3)
         << state.timestamp << " n=" << num_ambiguities
@@ -105,6 +156,11 @@ bool RtkImuCameraRrrVaEstimator::estimateVisionAidedAmbiguityCovariance(
         << " rel_err=" << std::setprecision(6) << rel_err
         << " tr_fast=" << tr_fast
         << " tr_ceres=" << tr_ceres
+        << " max_diag_rel=" << max_diag_rel
+        << " min_eig_diff=" << min_eig_diff
+        << " psd_diff=" << psd_diff
+        << " gen_eig_min=" << gen_eig_min
+        << " gen_eig_max=" << gen_eig_max
         << " fast_ms=" << std::setprecision(3)
         << chrono::duration<double, std::milli>(t1 - t0).count()
         << " ceres_ms=" << chrono::duration<double, std::milli>(t3 - t2).count()
