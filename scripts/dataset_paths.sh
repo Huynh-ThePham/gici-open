@@ -2,14 +2,16 @@
 # Source from bash:  source "$(dirname "$0")/dataset_paths.sh"
 # Or:              . scripts/dataset_paths.sh
 
-export GICI_DATA_ROOT="${GICI_DATA_ROOT:-/media/theph/Data1/Research/dataset}"
+# GICI board data relocated under a dedicated Gici/ subdir 2026-07 (was directly under
+# dataset/). Board dirs now at ${GICI_DATA_ROOT}/{1.1,3.1,...}.
+export GICI_DATA_ROOT="${GICI_DATA_ROOT:-/media/theph/Data1/Research/dataset/Gici}"
 
 # GICI board datasets (gici-open-dataset numbering)
 export GICI_DATASET_1_1="${GICI_DATASET_1_1:-${GICI_DATA_ROOT}/1.1}"
 export GICI_DATASET_1_1_RINEX="${GICI_DATASET_1_1_RINEX:-${GICI_DATA_ROOT}/1.1-rinex-imutext}"
 
-# UrbanNav (optional; extract under ${GICI_DATA_ROOT}/UrbanNavDataset if present)
-export URBANNAV_DATA_ROOT="${URBANNAV_DATA_ROOT:-${GICI_DATA_ROOT}/UrbanNavDataset}"
+# UrbanNav lives beside Gici/ (absolute, decoupled from GICI_DATA_ROOT).
+export URBANNAV_DATA_ROOT="${URBANNAV_DATA_ROOT:-/media/theph/Data1/Research/dataset/UrbanNav}"
 
 # RTCM reference/ephemeris stream start date per GICI board dataset.
 # MUST match the dataset collection date (gici-open-dataset README table),
