@@ -126,7 +126,7 @@ estimate:
         code_to_phase_ratio: 1000.0
         doppler_error_factor: 0.2
         relative_velocity: [10.0, 10.0, 1.0]
-        relative_frequency: 0.01
+        relative_frequency: 1.0  # author value; matched across deterministic arms (was 0.01, 2026-07-21)
     visual_estimator_base_options:
       feature_error_std: 5.0
       stable_feature_error_std: 1.0
