@@ -188,6 +188,13 @@ AmbiguityResolution::Result AmbiguityResolution::solveRtk(
 
   // Apply in graph and check residual
   double range_cost_before = computeRangeCost(epoch_id);
+  // Keep the RTK path consistent with solvePpp(): when explicitly enabled, a
+  // fixation must not make the active visual/IMU objective worse. This is a
+  // GT-free Pareto veto and can only turn an accepted fix into NoFix.
+  double joint_cost_before = 0.0;
+  if (options_.use_joint_cost_validation) {
+    joint_cost_before = computeJointNonGnssCost();
+  }
   graph_->options.max_num_iterations = 1;
   graph_->options.logging_type = ceres::LoggingType::SILENT;
   graph_->options.minimizer_progress_to_stdout = false;
@@ -198,10 +205,30 @@ AmbiguityResolution::Result AmbiguityResolution::solveRtk(
     LOG(INFO) << "Invalid ambiguity resolution: Total cost changes from " 
       << std::scientific << std::setprecision(3) 
       << range_cost_before << " to " << range_cost << ".";
+    LOG(INFO) << "[ar-veto] epoch_bundle=" << epoch_id.bundleId()
+      << " reason=range before=" << range_cost_before
+      << " after=" << range_cost;
     setGraphParameters(full_parameters_store_);
     eraseAmbiguityResidualBlocks(curAmbLanePairs());
     return Result::NoFix;
   }
+  if (options_.use_joint_cost_validation) {
+    const double joint_cost = computeJointNonGnssCost();
+    if (joint_cost > joint_cost_before) {
+      LOG(INFO) << "[ar-veto] epoch_bundle=" << epoch_id.bundleId()
+        << " reason=joint_non_gnss before=" << std::scientific
+        << std::setprecision(12) << joint_cost_before
+        << " after=" << joint_cost;
+      setGraphParameters(full_parameters_store_);
+      eraseAmbiguityResidualBlocks(curAmbLanePairs());
+      return Result::NoFix;
+    }
+  }
+
+  LOG(INFO) << "[ar-accept] epoch_bundle=" << epoch_id.bundleId()
+    << " uwl=" << num_success_uwl
+    << " wl=" << num_success_wl
+    << " nl=" << num_success_nl;
 
   // Check status
   if (num_success_nl > 0) return Result::NlFix;
