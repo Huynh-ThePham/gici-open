@@ -4,29 +4,35 @@
 online. VA-v2/v3/v4 / robust-float falsification is **deferred** (not the main claim).
 Recommended flag for this letter: `ar_use_fast_marginal_covariance` only.
 
-**Not submission-ready yet.** See `SUBMISSION_GAPS.md`.
+**Scientific scope frozen 2026-07-21.** Paper 1 reports the covariance method,
+its numerical/runtime validation, and bounded secondary system impact. The
+Deep horizontal tail is a disclosed limitation (residual multipath on
+line-of-sight signals, not covariance-scale error); a GNSS-independent
+consistency-based float weighting is reserved for follow-on work. Measurement-
+internal proxies (C/N0, robust-DD, visual-NLOS) are not claimed as tail fixes
+in this letter.
 
-### Clean re-run (mandatory — discard old numbers)
+### Optional regeneration (does not expand the frozen claims)
 
 ```bash
-# USE THIS — fresh dated tree, cov-centric arms only:
+# Cov-centric regeneration path:
 scripts/run_paper_cov_all.sh
 
 # DO NOT use scripts/run_paper_all.sh  (old VA-v4/RF chain)
-# DO NOT cite results/research/paper_repro/ or old board logs
+# Historical dose-chain outputs remain outside Paper-1 claims.
 ```
 
 ## Source of truth
 
 | Artifact | Path |
 |----------|------|
-| Draft (EN) | `DRAFT_FULL.md` |
-| Draft (VN) | `DRAFT_FULL_VI.md` |
+| Submission manuscript (source of truth) | `latex/main.tex` |
+| Working prose snapshots (archival) | `drafts/DRAFT_FULL.md`, `drafts/DRAFT_FULL_VI.md` |
 | Claim audit | `CLAIM_AUDIT.md` |
 | Numbers (cov e2e) | `../VISION_AIDED_AR.md` (VA-fast paired) + `[vaar-fast]` log percentiles |
 | Numbers (dose chain, deferred) | `../../results/research/paper_repro/paper_tables.md` |
 | Pre-registrations (deferred chain) | `../PREREG_*.md` |
-| LaTeX | `latex/main.tex` → `latex/main.pdf` |
+| Rendered manuscript | `latex/main.tex` → `latex/main.pdf` |
 | BibTeX | `refs.bib` |
 | Figures in letter | F1/F2 TikZ, `fig/F3_timing.pdf`, `fig/F4_tail.pdf` (F5 dose demoted) |
 
@@ -78,6 +84,7 @@ tectonic -X compile main.tex
 See `docs/baseline/FILEMODE_URBANNAV_RRR_BASELINE_V1.md` and `research/AUTHOR_METHODOLOGY.md`.
 
 - Rover: `*.ublox.f9p.splitter.obs`
-- Deep base: session `hkkt141g.21o` (5 s), **not** full-day `hkkt141g.rnx`
+- Deep base: session-aligned 5 s HKKT slice selected by the canonical runner,
+  **not** the full-day 30 s file
 - Config: `research/config/rtk_imu_camera_rrr_urbannav.yaml` (not dataset `gici_rrr/config.yaml`)
-- Disclosed adaptations: `max_age=35`, `relative_frequency=0.01`
+- Disclosed adaptations: `max_age=35`, `relative_frequency=1.0`

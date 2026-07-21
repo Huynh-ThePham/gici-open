@@ -34,7 +34,7 @@ Open platforms often substitute a GNSS-only ``shadow'' covariance because
 forming the joint sliding-window covariance online is considered too
 expensive, discarding the IMU and visual information that tight coupling is
 meant to provide.
-We present an exact-in-window marginal
+We present an exact-in-window marginal at the optimizer's fixed linearization,
 $Q_{aa}=[H_{\mathrm{active}}^{-1}]_{aa}$ obtained by two-stage sparse Schur
 elimination over the active GNSS--IMU--vision window, including the
 marginalization prior, with a numerical self-validation gate and shadow
@@ -50,9 +50,9 @@ Mean covariance query time is 28\,ms versus 812\,ms for Ceres
 epochs above a 50\,ms covariance budget (max 97.5\,ms).
 End-to-end effects versus shadow AR are reported as secondary system impact;
 an overconfident local-conditioning approximation is harmful.
-Full matrix Loewner diagnostics and a Ceres end-to-end oracle are required to
-support a stronger ``exact'' claim and are in progress
-(Sec.~\ref{sec:limits}).
+Directional Loewner diagnostics and a Ceres-fed end-to-end AR oracle are left
+to future validation; accordingly, we claim neither directional dominance nor
+trajectory equivalence to Ceres (Sec.~\ref{sec:limits}).
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -85,7 +85,8 @@ window} and \emph{affordable every epoch}.
 This paper focuses on that covariance problem.
 We make three contributions:
 \begin{enumerate}
-\item An algorithm that extracts the exact-in-window marginal ambiguity
+\item An algorithm that extracts the exact-in-window, fixed-linearization
+  marginal ambiguity
   covariance $Q_{aa}=[H_{\mathrm{active}}^{-1}]_{aa}$ by structure-exploiting
   two-stage elimination, without inverting the full information matrix and
   without dropping the marginalization prior.
@@ -292,8 +293,8 @@ On abstention the estimator returns the shadow covariance for that epoch.
 
 The estimator is registered as an opt-in variant
 (\texttt{rtk\_imu\_camera\_rrr\_va}); upstream defaults are unchanged.
-File-mode UrbanNav configs disclose \texttt{max\_age}=35\,s (for 30\,s HKKT
-base epochs) and \texttt{relative\_frequency}=0.01 (code default); neither was
+File-mode UrbanNav configs disclose the retained \texttt{max\_age}=35\,s
+setting and \texttt{relative\_frequency}=1.0; neither was
 tuned against UrbanNav ground truth.
 
 %======================================================================
@@ -309,8 +310,8 @@ error $\|Q_{\mathrm{prop}}-Q_{\mathrm{Ceres}}\|_F/\|Q_{\mathrm{Ceres}}\|_F$.
 Trace comparisons are a secondary safety proxy only.
 Loewner / directional diagnostics
 ($\min\mathrm{eig}(Q_{\mathrm{prop}}-Q_{\mathrm{Ceres}})$, generalized
-eigenvalues of the pair) are instrumented in the benchmark path and must be
-reported before a stronger exactness claim (Sec.~\ref{sec:limits}).
+eigenvalues of the pair) are outside the evidence reported here; we therefore
+make no directional-dominance claim (Sec.~\ref{sec:limits}).
 
 \paragraph{Accuracy.}
 Table~\ref{tab:t1}: a validated covariance is produced on 99.94\% of epochs
@@ -394,16 +395,15 @@ Dataset & Role & DOY & Notes \\
 \midrule
 GICI-board 1.1 & Cov.\ + runtime & --- & Open-sky \\
 UrbanNav Deep & System impact & 141 Whampoa & $n{=}15119$ \\
-UrbanNav Med. & Float-path iso.\ (held) & 137 TST & pending isolation \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-UrbanNav Deep uses the session-aligned 5\,s HKKT base slice
-\texttt{hkkt141g.21o} (not the full-day 30\,s file).
+UrbanNav Deep uses the session-aligned 5\,s HKKT base slice selected by the
+repository runner (not the full-day 30\,s file).
 Primary metric: unaligned raw ENU RMSE (E/N/U, yaw).
 Sim(3) APE is used only when comparing to Chi Table~V.
-Admissibility: Deep $n_{\mathrm{matched}}\ge14000$; Medium $\ge6500$.
+Admissibility: Deep $n_{\mathrm{matched}}\ge14000$.
 Research flags are opt-in and default-off; the frozen upstream baseline APE on
 GICI-board~1.1 ($0.029198$\,m / $0.470557^\circ$, bands $\pm0.005$\,m /
 $\pm0.1^\circ$) is re-checked after builds.
@@ -443,12 +443,11 @@ Shadow (paired w/ local study) & $2.77{\pm}0.44$ & $\sim$1.3\% \\
 Local conditioning (unsafe) & $6.75{\pm}2.98$ & $\sim$17\% \\
 Shadow (paired w/ proposed) & $3.03{\pm}0.68$ & 1.7\% \\
 Proposed exact-in-window & $3.40{\pm}0.78$ & $8.8{\pm}1.2\%$ \\
-Ceres exact (oracle e2e) & --- & pending \\
 \bottomrule
 \end{tabular}\\[0.2em]
 {\scriptsize Spreads are repeat-run variation on one Deep sequence, not
-independent scenes. Ceres oracle end-to-end is required before claiming
-proposed reproduces Ceres AR.}
+independent scenes. No claim is made that the proposed path reproduces
+Ceres-fed end-to-end AR decisions.}
 \end{table}
 
 %======================================================================
@@ -462,9 +461,8 @@ Vertical RMSE and yaw improve in all three repeats; fix rate rises about
 fivefold; horizontal RMSE is mixed (worse in 2/3 repeats).
 These repeats are \emph{not} independent statistical samples; they measure
 run-to-run variation under load-sensitive replay.
-Medium is withheld from result tables until float-path isolation passes
-(Sec.~\ref{sec:limits}): with 0\% NlFix, continuous trajectories must match
-before Deep deltas can be attributed solely to AR.
+Medium is withheld from result tables because its 0\% NlFix regime does not
+isolate AR effects from solver timing and ordering (Sec.~\ref{sec:limits}).
 
 \begin{table}[!t]
 \caption{Deep system impact: proposed $Q_{aa}$ vs.\ shadow (one sequence, 3 repeats)}
@@ -481,10 +479,10 @@ Proposed & $3.40{\pm}0.78$ & $1.46{\pm}0.21$ & $0.66{\pm}0.07$ & 8.8\% \\
 \end{tabular}
 \end{table}
 
-\paragraph{What still needs an oracle.}
-The decisive end-to-end claim is that proposed AR decisions and trajectories
-match a Ceres-fed AR oracle at much lower covariance cost.
-That offline oracle is configured but not yet reported here.
+\paragraph{Boundary of the end-to-end evidence.}
+This paper does not claim that proposed AR decisions and trajectories match a
+Ceres-fed AR oracle. Its primary validation is covariance-level agreement and
+runtime; UrbanNav results quantify secondary system impact.
 Fig.~\ref{fig:tail} shows only that swapping to joint $Q_{aa}$ can change
 fix timing and later horizontal error; it is not a causal proof of
 prior poisoning.
@@ -502,20 +500,23 @@ heavy tail vs.\ a shadow baseline run). Markers: fixed epochs on the proposed ar
 \label{sec:limits}
 
 \begin{itemize}
-\item \emph{Exactness evidence incomplete.} Frobenius match at $10^{-3}$ covers
-  90.1\% of usable epochs; Loewner PSD checks, per-diagonal errors, and
-  worst-case directional variance ratios are instrumented and must be reported
-  before claiming elementwise equivalence to Ceres.
-\item \emph{No Ceres e2e oracle yet.} Covariance-level agreement does not imply
-  identical AR decisions on UrbanNav; an offline Ceres-fed AR run is required.
-\item \emph{Float-path isolation pending.} Arm-to-arm Medium differences at
-  0\% NlFix indicate solver-timing / WlFix / ordering confounders until a
-  deterministic isolation test passes.
-\item \emph{Soft real-time.} The 50\,ms figure is a soft covariance budget at
-  $\sim$1\,Hz AR; 4.3\% exceed it (max 97.5\,ms). Report optimize+cov latency.
+\item \emph{Exactness scope.} Frobenius match at $10^{-3}$ covers 90.1\% of
+  usable epochs. Without Loewner, per-diagonal, and worst-direction tests, the
+  evidence does not establish elementwise equivalence or directional dominance.
+\item \emph{No Ceres e2e equivalence claim.} Covariance-level agreement does
+  not imply identical AR decisions or trajectories on UrbanNav.
+\item \emph{Medium withheld.} At 0\% NlFix, arm-to-arm differences can reflect
+  solver timing, WlFix, or ordering rather than the tested AR covariance.
+\item \emph{Soft real-time.} The 50\,ms figure is a covariance-query budget at
+  $\sim$1\,Hz AR; 4.3\% exceed it (max 97.5\,ms). It is not a reported bound on
+  total optimize-plus-covariance latency.
 \item \emph{Statistics.} Three repeats of one Deep sequence are not three
   independent environments.
-\item \emph{Decision-layer urban mitigations} are outside this letter.
+\item \emph{Decision-layer urban mitigations} are outside this letter. In
+  particular, the Deep horizontal heavy tail remains unresolved. Because it is
+  consistent with residual multipath on tracked (line-of-sight) signals rather
+  than covariance-scale error, a GNSS-independent consistency-based float
+  weighting is reserved for a separate follow-on study.
 \end{itemize}
 
 %======================================================================
@@ -529,9 +530,9 @@ On open-sky graphs it is about 29$\times$ faster than requesting the same
 blocks from \texttt{ceres::Covariance}, produces a validated output on 99.94\%
 of epochs, and achieves Frobenius relative error below $10^{-3}$ on 90.1\% of
 usable epochs.
-Stronger Loewner diagnostics, a Ceres end-to-end AR oracle, and float-path
-isolation are the remaining measurements needed before submission-strength
-exactness and causality claims.
+Directional Loewner diagnostics, a Ceres end-to-end AR oracle, and deterministic
+float-path isolation would support stronger future claims, but are not assumed
+by the bounded claims in this paper.
 Secondary Deep system effects versus shadow AR (more fixes; mixed horizontal)
 must be interpreted in that light.
 
