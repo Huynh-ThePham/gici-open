@@ -156,3 +156,52 @@ pairs; decision rules unchanged (tail event d_h > +1.0 m in any adjacent pair;
 SUCCESS/PARTIAL bins on the 3 adjacent-pair deltas). The in-flight paired wave 1
 (ungated) is kept as exploratory/secondary data only. Mechanism-check status
 from it: PASS (26/315 acceptances with std > 0.005 cycles, max 0.615).
+
+**2026-07-21 10:46 +07 (RTK implementation-gap correction; registered BEFORE
+building or evaluating the corrected binary).** A GT-free source audit after the
+`relative_frequency: 1.0` Deep run found that `use_joint_cost_validation` was
+implemented only in `solvePpp()`. UrbanNav uses the separate `solveRtk()` path in
+`ambiguity_resolution_differential.cpp`, which never read the option. Therefore
+all earlier UrbanNav claims that the joint visual/IMU veto had been exercised or
+falsified are withdrawn; those runs remain valid for the covariance and dose
+mechanisms only.
+
+The correction ports the already-declared zero-threshold Pareto veto unchanged to
+`solveRtk()`: after the existing one-iteration constrained solve, reject and
+restore the pre-fix graph state if the robustified reprojection+IMU objective has
+increased. It uses estimator residuals only, no GT, no learned/tuned constant, and
+is monotone in safety because it can only replace an accepted fix with `NoFix`.
+Baseline behavior remains unchanged because the option defaults to false.
+
+Evaluation is frozen as a mechanism-first A/B on Deep with matched
+`relative_frequency: 1.0`: preserve the old binary, run old and corrected VA-v4
+under the deterministic ISO config, and report every result. The mechanism passes
+only if `[ar-veto] reason=joint_non_gnss` occurs. Position metrics are secondary
+and may not be used to alter the rule. A single run is diagnostic, not a
+significance claim. Independently observed but deliberately deferred to a later
+single-variable intervention: the intra-epoch ambiguity Kalman update still uses
+hard `1e-6 cycle^2` covariance even when the persistent graph factor is soft.
+
+**2026-07-21 (post-evaluation correction; recorded AFTER the A/B runs — this is an
+honesty correction, not part of the pre-registration).** The 10:46 entry above
+called this "the deterministic ISO config." That is factually wrong. Per
+`research/paper/RUNBOOK_CANONICAL_RERUN.md` (l.9), UrbanNav results are
+"load-sensitive and not bit-reproducible (confirmed)": with `enable_input_align:
+false` and queue-depth `enable_backend_data_sparsify: true`, the per-solve
+measurement set varies with wall-clock/CPU load even under `num_threads: 1` +
+`max_solver_time: 1.0e9`. No `_det` config exists (pruned). The A/B is therefore a
+single draw per arm from a non-reproducible real-time process, not a deterministic
+comparison. Confirmed empirically by re-running the corrected arm under identical
+setup (`results/research/rtk_joint_veto_ab_20260721/{new,new2}`): author evo_ape
+APE = 2.700 vs 3.122 m and rotation = 1.676 vs 0.945 deg (run-to-run Δ ≈ 0.42 m /
+0.73 deg).
+
+Impact on the registered rule — NONE for the primary (mechanism) outcome, which
+passes robustly: `[ar-veto] reason=joint_non_gnss` fired 95× (`new`) and 57×
+(`new2`), vs 0 for the pre-veto `old` binary. The position/rotation metrics —
+already registered as secondary and non-decisive — are confirmed to lie within the
+run-to-run noise floor at n=1 (the old→new position difference, 0.20 m, is smaller
+than the 0.42 m noise; `new2` was worse than `old`; `new`'s rotation excursion
+vanished in `new2`). No accuracy or attitude effect of the veto is established; any
+such claim would require a properly powered multi-run study (order n≈8/arm) on the
+production arms with the author evo_ape pipeline.
