@@ -95,6 +95,10 @@ class Dataset:
     dcb: str
     timeout_s: int
     min_gpgga_epochs: int
+    # Full expected GPGGA epoch count = the completion target (0 -> fall back to
+    # min_gpgga_epochs). A plateau ABOVE min_gpgga_epochs but BELOW this is a stall-
+    # induced TRUNCATION, not end-of-stream, and must not be accepted as complete.
+    expected_gpgga: int = 0
     # Official-eval GT quality gate (Inertial-Explorer Q <= gt_q_max). None = no gate.
     gt_q_max: int | None = None
 
@@ -113,6 +117,7 @@ DATASETS: dict[str, Dataset] = {
         dcb="research/dcb/CAS0MGXRAP_20211370000_01D_01D_DCB.BSX",
         timeout_s=7200,
         min_gpgga_epochs=6500,
+        expected_gpgga=7579,
     ),
     "deep": Dataset(
         key="deep",
@@ -128,6 +133,7 @@ DATASETS: dict[str, Dataset] = {
         dcb="research/dcb/CAS0MGXRAP_20211410000_01D_01D_DCB.BSX",
         timeout_s=10800,
         min_gpgga_epochs=14000,
+        expected_gpgga=15119,
     ),
     "harsh": Dataset(
         key="harsh",
@@ -144,6 +150,7 @@ DATASETS: dict[str, Dataset] = {
         dcb="research/dcb/CAS0MGXRAP_20211380000_01D_01D_DCB.BSX",
         timeout_s=14400,
         min_gpgga_epochs=28000,
+        expected_gpgga=32609,
         # Official Harsh eval: GT is partial (t_rel [453,2764]s, auto-windowed by GT
         # coverage) and low quality; gate to Q <= 2 per the dataset audit.
         gt_q_max=2,
@@ -546,16 +553,27 @@ def _log_has_fatal(path: Path) -> bool:
 def _watchdog_settings(ds: Dataset | None, use_watchdog: bool) -> dict[str, float | int | bool]:
     enabled = use_watchdog and os.environ.get("URBANNAV_FILEMODE_WATCH", "1") != "0"
     default_min = ds.min_gpgga_epochs if ds else 5000
+    min_gpgga = int(os.environ.get("URBANNAV_FILEMODE_MIN_GPGGA", str(default_min)))
+    default_expected = ds.expected_gpgga if (ds and ds.expected_gpgga) else default_min
+    expected = int(os.environ.get("URBANNAV_FILEMODE_EXPECTED_GPGGA", str(default_expected)))
+    # Clean completion requires reaching (near) the full expected epoch count -- NOT merely
+    # the sanity floor. Using the floor let a transient near-end stall (plateau above the
+    # floor for stable_s) be misread as end-of-stream and truncated (deep/baseline run2,
+    # 2026-07-21). Small tolerance absorbs benign run-to-run epoch jitter.
+    complete_target = max(min_gpgga, expected - max(5, int(0.003 * expected)))
     return {
         "enabled": enabled,
         "interval_s": float(os.environ.get("URBANNAV_FILEMODE_WATCH_INTERVAL", "10")),
         "stable_s": float(os.environ.get("URBANNAV_FILEMODE_STABLE_SECONDS", "90")),
-        "min_gpgga": int(os.environ.get("URBANNAV_FILEMODE_MIN_GPGGA", str(default_min))),
+        "min_gpgga": min_gpgga,
+        "expected_gpgga": expected,
+        "complete_target": complete_target,
         "progress_every_s": float(os.environ.get("URBANNAV_FILEMODE_PROGRESS_EVERY", "30")),
-        # Hang guard: gici_main can freeze near end-of-stream (known race). If the
-        # solution stops growing for this long REGARDLESS of min_gpgga, stop it so
-        # the run can't wedge until timeout. Below-gate hangs are accepted as partial.
-        "hang_s": float(os.environ.get("URBANNAV_FILEMODE_HANG_SECONDS", "150")),
+        # Hang guard: gici_main can freeze near end-of-stream (known race). If the solution
+        # stops growing for this long, stop it so the run can't wedge until timeout. Raised
+        # 150->240s so a transient near-end stall has time to RESUME to the full count
+        # (avoiding truncation) before the guard fires.
+        "hang_s": float(os.environ.get("URBANNAV_FILEMODE_HANG_SECONDS", "240")),
     }
 
 
@@ -635,12 +653,12 @@ def run_gici(
                     prev_gpgga, prev_size = gpgga, size
                     continue
 
-                if gpgga >= int(wd["min_gpgga"]) and gpgga == prev_gpgga:
+                if gpgga >= int(wd["complete_target"]) and gpgga == prev_gpgga:
                     stable_elapsed += float(wd["interval_s"])
                     if stable_elapsed >= float(wd["stable_s"]):
                         print(
                             f"  [watchdog] solution stable {stable_elapsed:.0f}s "
-                            f"(gpgga={gpgga} >= {wd['min_gpgga']}); sending SIGINT",
+                            f"(gpgga={gpgga} >= target {wd['complete_target']}); sending SIGINT",
                             flush=True,
                         )
                         os.killpg(proc.pid, signal.SIGINT)
@@ -688,22 +706,38 @@ def run_gici(
         raise RuntimeError(f"no solution.txt; see {log_path}")
     final_gpgga = count_gpgga(sol)
     meta["final_gpgga"] = final_gpgga
-    if final_gpgga < int(wd["min_gpgga"]):
-        # A hang near end-of-stream can freeze the run just below the gate. Accept
-        # it as a (flagged) partial trajectory if it still covers >=85% of the gate;
-        # otherwise it is a genuinely short/broken run and must fail.
-        if meta.get("hang_stopped") and final_gpgga >= 0.85 * int(wd["min_gpgga"]):
-            meta["short_run"] = True
-            print(
-                f"  [watchdog] accepting partial (hang): {final_gpgga} GPGGA "
-                f">= 85% of {wd['min_gpgga']}",
-                flush=True,
-            )
-        else:
-            raise RuntimeError(
-                f"solution has only {final_gpgga} GPGGA epochs; "
-                f"expected at least {wd['min_gpgga']}: {sol}"
-            )
+    meta["expected_gpgga"] = int(wd["expected_gpgga"])
+    target = int(wd["complete_target"])
+    meta["truncated"] = final_gpgga < target
+    if final_gpgga >= target:
+        pass  # full-length run
+    elif final_gpgga >= int(wd["min_gpgga"]):
+        # Above the sanity floor but below the full expected count: a stall/hang stopped
+        # the run early (the deep/baseline run2 truncation). NEVER silently accept a
+        # truncated run -- remove the partial so a resume cannot skip it, and fail so the
+        # caller re-runs it (mirrors run_gici_canonical.sh reason-based completion).
+        try:
+            sol.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"truncated run: {final_gpgga} GPGGA epochs < completion target {target} "
+            f"(expected ~{wd['expected_gpgga']}); removed partial, re-run: {log_path}"
+        )
+    elif meta.get("hang_stopped") and final_gpgga >= 0.85 * int(wd["min_gpgga"]):
+        # Genuine hang below even the sanity floor but still >=85% of it: accept as a
+        # flagged partial (e.g. Harsh, whose ground truth is itself partial).
+        meta["short_run"] = True
+        print(
+            f"  [watchdog] accepting partial (hang): {final_gpgga} GPGGA "
+            f">= 85% of {wd['min_gpgga']}",
+            flush=True,
+        )
+    else:
+        raise RuntimeError(
+            f"solution has only {final_gpgga} GPGGA epochs; "
+            f"expected at least {wd['min_gpgga']}: {sol}"
+        )
     return meta
 
 
